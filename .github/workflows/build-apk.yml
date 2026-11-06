@@ -1,0 +1,407 @@
+name: Build DigitalLock Liquid Glass APK
+
+on:
+  push:
+    branches: [ "*" ]
+  pull_request:
+    branches: [ "*" ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Scaffold Android Project Structure for Single-File Mobile Upload
+        shell: bash
+        run: |
+          set -e
+          mkdir -p app/src/main/java/com/digitallock
+          mkdir -p app/src/main/res/xml
+          mkdir -p app/src/main/res/values
+          mkdir -p native/include
+          mkdir -p native/src
+          mkdir -p native/shaders
+
+          # If user uploaded DigitalLockComplete.kt at repository root, move/copy it into package dir
+          if [ -f "DigitalLockComplete.kt" ]; then
+            cp "DigitalLockComplete.kt" app/src/main/java/com/digitallock/DigitalLockComplete.kt
+          fi
+
+          cat << 'EOF_SETTINGS' > settings.gradle.kts
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "DigitalLock"
+          include(":app")
+          EOF_SETTINGS
+
+          cat << 'EOF_PROPS' > gradle.properties
+          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          EOF_PROPS
+
+          cat << 'EOF_ROOT_GRADLE' > build.gradle.kts
+          plugins {
+              id("com.android.application") version "8.7.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+          }
+          EOF_ROOT_GRADLE
+
+          cat << 'EOF_APP_GRADLE' > app/build.gradle.kts
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+          }
+
+          android {
+              namespace = "com.digitallock"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.digitallock"
+                  minSdk = 33
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0.0"
+
+                  externalNativeBuild {
+                      cmake {
+                          cppFlags += "-std=c++20 -O3 -Wall"
+                          arguments += "-DANDROID_STL=c++_shared"
+                      }
+                  }
+                  ndk {
+                      abiFilters += listOf("arm64-v8a", "x86_64")
+                  }
+              }
+
+              buildTypes {
+                  debug {
+                      isMinifyEnabled = false
+                  }
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              buildFeatures {
+                  compose = true
+                  buildConfig = true
+              }
+
+              externalNativeBuild {
+                  cmake {
+                      path = file("../native/CMakeLists.txt")
+                      version = "3.22.1"
+                  }
+              }
+          }
+
+          dependencies {
+              implementation("androidx.core:core-ktx:1.15.0")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+              implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+              implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+              implementation("androidx.activity:activity-compose:1.9.3")
+              implementation(platform("androidx.compose:compose-bom:2024.11.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-graphics")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.biometric:biometric:1.1.0")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+          }
+          EOF_APP_GRADLE
+
+          cat << 'EOF_MANIFEST' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+
+              <application
+                  android:allowBackup="false"
+                  android:directBootAware="true"
+                  android:icon="@android:drawable/ic_lock_idle_lock"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.DigitalLock">
+
+                  <activity
+                      android:name="com.digitallock.MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <activity
+                      android:name="com.digitallock.LockActivity"
+                      android:directBootAware="true"
+                      android:excludeFromRecents="true"
+                      android:exported="false"
+                      android:launchMode="singleInstance"
+                      android:showWhenLocked="true"
+                      android:turnScreenOn="true"
+                      android:taskAffinity="com.digitallock.locktask"
+                      android:theme="@style/Theme.DigitalLock.LockScreen" />
+
+                  <service
+                      android:name="com.digitallock.MonitorService"
+                      android:directBootAware="true"
+                      android:enabled="true"
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse|mediaProjection">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="Screen state event monitoring for user-configured DigitalLock PIN session protection" />
+                  </service>
+
+                  <service
+                      android:name="com.digitallock.AccessibilityMonitor"
+                      android:directBootAware="true"
+                      android:exported="false"
+                      android:label="@string/accessibility_service_label"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_service_config" />
+                  </service>
+
+                  <receiver
+                      android:name="com.digitallock.BootReceiver"
+                      android:directBootAware="true"
+                      android:enabled="true"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                      </intent-filter>
+                  </receiver>
+
+                  <receiver
+                      android:name="com.digitallock.DigitalLockDeviceAdminReceiver"
+                      android:description="@string/device_admin_description"
+                      android:exported="true"
+                      android:label="@string/app_name"
+                      android:permission="android.permission.BIND_DEVICE_ADMIN">
+                      <meta-data
+                          android:name="android.app.device_admin"
+                          android:resource="@xml/device_admin_policies" />
+                      <intent-filter>
+                          <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                      </intent-filter>
+                  </receiver>
+
+              </application>
+          </manifest>
+          EOF_MANIFEST
+
+          cat << 'EOF_ACC' > app/src/main/res/xml/accessibility_service_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagDefault"
+              android:canRetrieveWindowContent="false"
+              android:description="@string/accessibility_service_description"
+              android:notificationTimeout="150"
+              android:settingsActivity="com.digitallock.MainActivity" />
+          EOF_ACC
+
+          cat << 'EOF_ADM' > app/src/main/res/xml/device_admin_policies.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies />
+          </device-admin>
+          EOF_ADM
+
+          cat << 'EOF_STR' > app/src/main/res/values/strings.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">DigitalLock</string>
+              <string name="accessibility_service_label">DigitalLock Session Guard</string>
+              <string name="accessibility_service_description">Observes top-level window transitions to keep LockActivity visible while a DigitalLock session is locked. Never reads screen text or personal content (canRetrieveWindowContent=false).</string>
+              <string name="device_admin_description">Used only when DigitalLock is provisioned as a Device Owner to allow Lock Task Mode.</string>
+          </resources>
+          EOF_STR
+
+          cat << 'EOF_THM' > app/src/main/res/values/themes.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.DigitalLock" parent="android:Theme.Material.NoActionBar" />
+              <style name="Theme.DigitalLock.LockScreen" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:windowBackground">@android:color/black</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          EOF_THM
+
+          cat << 'EOF_CMAKE' > native/CMakeLists.txt
+          cmake_minimum_required(VERSION 3.22.1)
+          project("digitallock_glass" LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+          add_library(digitallock_glass SHARED src/glass_refraction_engine.cpp)
+          find_library(log-lib log)
+          find_library(gles3-lib GLESv3)
+          target_link_libraries(digitallock_glass ${log-lib} ${gles3-lib})
+          EOF_CMAKE
+
+          cat << 'EOF_H' > native/include/glass_refraction_engine.h
+          #ifndef DIGITALLOCK_GLASS_REFRACTION_ENGINE_H
+          #define DIGITALLOCK_GLASS_REFRACTION_ENGINE_H
+          #include <cstdint>
+          namespace digitallock::graphics {
+          struct GlassEngineContext {
+              float densityScale;
+              uint32_t glProgramId;
+              bool initialized;
+          };
+          float evaluateCircleMap(float normalizedDepth) noexcept;
+          float computeRefractionDisplacement(float signedDistancePx, float refractionHeightPx, float refractionAmountPx) noexcept;
+          const char* getPinLensGlslSource() noexcept;
+          }
+          #endif
+          EOF_H
+
+          cat << 'EOF_CPP' > native/src/glass_refraction_engine.cpp
+          #include "glass_refraction_engine.h"
+          #include <jni.h>
+          #include <cmath>
+          #include <algorithm>
+          #include <GLES3/gl3.h>
+
+          namespace digitallock::graphics {
+          static const char* kPinLensGlslFragmentShader = R"GLSL(#version 300 es
+          precision highp float;
+          uniform sampler2D uBackdropTexture;
+          uniform vec2 uResolution;
+          uniform vec2 uButtonCenterPx;
+          uniform float uButtonRadiusPx;
+          uniform float uRefractionHeightPx;
+          uniform float uRefractionAmountPx;
+          in vec2 vTexCoord;
+          out vec4 fragColor;
+          float circleMap(float x) {
+              float c = clamp(x, 0.0, 1.0);
+              return 1.0 - sqrt(1.0 - c * c);
+          }
+          void main() {
+              vec2 fragCoordPx = vTexCoord * uResolution;
+              vec2 centeredCoord = fragCoordPx - uButtonCenterPx;
+              float sd = length(centeredCoord) - uButtonRadiusPx;
+              if (sd > 0.0) discard;
+              if (-sd >= uRefractionHeightPx) {
+                  fragColor = texture(uBackdropTexture, vTexCoord);
+                  return;
+              }
+              float d = circleMap(1.0 - (-sd / uRefractionHeightPx)) * (-uRefractionAmountPx);
+              vec2 grad = length(centeredCoord) > 0.0001 ? normalize(centeredCoord) : vec2(0.0, -1.0);
+              vec2 refractedUv = (fragCoordPx + d * grad) / uResolution;
+              fragColor = texture(uBackdropTexture, refractedUv);
+          }
+          )GLSL";
+
+          float evaluateCircleMap(float normalizedDepth) noexcept {
+              const float x = std::clamp(normalizedDepth, 0.0f, 1.0f);
+              return 1.0f - std::sqrt(1.0f - x * x);
+          }
+
+          float computeRefractionDisplacement(float signedDistancePx, float refractionHeightPx, float refractionAmountPx) noexcept {
+              if (refractionHeightPx <= 0.0f || refractionAmountPx <= 0.0f) return 0.0f;
+              if (-signedDistancePx >= refractionHeightPx || signedDistancePx > 0.0f) return 0.0f;
+              const float ratio = 1.0f - (-signedDistancePx / refractionHeightPx);
+              return -evaluateCircleMap(ratio) * refractionAmountPx;
+          }
+
+          const char* getPinLensGlslSource() noexcept {
+              return kPinLensGlslFragmentShader;
+          }
+          }
+
+          extern "C" {
+          JNIEXPORT jlong JNICALL
+          Java_com_digitallock_NativeGlassBridge_nativeInitEngine(JNIEnv*, jobject, jfloat densityScale) {
+              auto* ctx = new digitallock::graphics::GlassEngineContext{densityScale > 0.0f ? densityScale : 1.0f, 0U, true};
+              return reinterpret_cast<jlong>(ctx);
+          }
+          JNIEXPORT jfloat JNICALL
+          Java_com_digitallock_NativeGlassBridge_nativeComputeRefractionOffset(JNIEnv*, jobject, jlong handle, jfloat sd, jfloat rh, jfloat ra) {
+              if (handle == 0L) return 0.0f;
+              return digitallock::graphics::computeRefractionDisplacement(sd, rh, ra);
+          }
+          JNIEXPORT jstring JNICALL
+          Java_com_digitallock_NativeGlassBridge_nativeGetGlslFragmentShader(JNIEnv* env, jobject) {
+              return env->NewStringUTF(digitallock::graphics::getPinLensGlslSource());
+          }
+          JNIEXPORT void JNICALL
+          Java_com_digitallock_NativeGlassBridge_nativeReleaseEngine(JNIEnv*, jobject, jlong handle) {
+              if (handle == 0L) return;
+              auto* ctx = reinterpret_cast<digitallock::graphics::GlassEngineContext*>(handle);
+              if (ctx->glProgramId != 0U) glDeleteProgram(ctx->glProgramId);
+              delete ctx;
+          }
+          }
+          EOF_CPP
+
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compile Debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload Compiled DigitalLock APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DigitalLock-LiquidGlass-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
