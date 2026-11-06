@@ -54,6 +54,7 @@ import component.liquid.rememberCombinedBackdrop
 import component.liquid.vibrancy
 import kotlinx.coroutines.launch
 import component.liquid.Backdrop
+import component.liquid.CombinedBackdrop
 import component.liquid.LayerBackdrop
 import component.liquid.blur
 import component.liquid.drawBackdrop
