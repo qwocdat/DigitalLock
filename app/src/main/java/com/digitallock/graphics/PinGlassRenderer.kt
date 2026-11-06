@@ -32,16 +32,15 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics. onClick
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -54,20 +53,20 @@ import component.liquid.lens
 import component.liquid.rememberCombinedBackdrop
 import component.liquid.vibrancy
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.blur.Backdrop
-import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.blur
-import top.yukonga.miuix.kmp.blur.drawBackdrop
-import top.yukonga.miuix.kmp.blur.highlight.BloomStroke
-import top.yukonga.miuix.kmp.blur.highlight.Highlight
-import top.yukonga.miuix.kmp.blur.highlight.LightPosition
-import top.yukonga.miuix.kmp.blur.highlight.LightSource
+import component.liquid.Backdrop
+import component.liquid.LayerBackdrop
+import component.liquid.blur
+import component.liquid.drawBackdrop
+import component.liquid.BloomStroke
+import component.liquid.Highlight
+import component.liquid.LightPosition
+import component.liquid.LightSource
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import top.yukonga.miuix.kmp.blur.sensor.rememberDeviceTilt
+import component.liquid.rememberDeviceTilt
 
 // Mirrors HighlightStyle.kt's LIGHT_REF for dualPeak specular rim lighting.
 private const val LIGHT_REF_X = 0.5f
@@ -256,13 +255,12 @@ object PinGlassRenderer {
                         }
                     }
                 }
-                .dropShadow(
+                .shadow(
+                    elevation = 12.dp,
                     shape = buttonShape,
-                    shadow = Shadow(
-                        radius = 12.dp,
-                        color = Color.Black,
-                        alpha = 0.24f,
-                    ),
+                    clip = false,
+                    ambientColor = Color.Black,
+                    spotColor = Color.Black,
                 )
                 .then(
                     if (isGraphicsActive && effectiveBackdrop != null) {
@@ -290,7 +288,7 @@ object PinGlassRenderer {
                                 // Ensure sufficient sampling padding before micro-diffusion & lens refraction
                                 padding = maxOf(padding, refAmountPx + 8.dp.toPx())
                                 vibrancy()
-                                if (config.microDiffusionBlurRadius > 0.dp) {
+                                if (config.microDiffusionBlurRadius.value > 0f) {
                                     val blurPx = config.microDiffusionBlurRadius.toPx()
                                     blur(blurPx, blurPx)
                                 }
