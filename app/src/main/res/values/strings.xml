@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DigitalLock</string>
+    <string name="accessibility_service_label">DigitalLock Session Guard</string>
+    <string name="accessibility_service_description">Observes top-level window transitions to keep LockActivity visible while a DigitalLock session is locked. Never reads screen text or personal content (canRetrieveWindowContent=false).</string>
+    <string name="device_admin_description">Used only when DigitalLock is provisioned as a Device Owner to allow Lock Task Mode.</string>
+</resources>
