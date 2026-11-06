@@ -1,0 +1,2 @@
+-keep class com.digitallock.graphics.NativeGlassBridge { *; }
+-keep class component.liquid.** { *; }
