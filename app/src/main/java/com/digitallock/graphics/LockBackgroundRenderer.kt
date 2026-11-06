@@ -32,8 +32,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.layerBackdrop
+import component.liquid.LayerBackdrop
+import component.liquid.layerBackdrop
 
 /**
  * Identifies the active background texture source for the Liquid Glass PIN screen.
