@@ -173,16 +173,30 @@ fun HomeScreen(
                     text = "Android System Integration & Honest Boundaries",
                     style = MaterialTheme.typography.titleLarge,
                 )
+                val keyguardStatusText = if (snapshot.isAndroidDeviceSecure) {
+                    "Yes (Double-lock unless disabled in Android Settings)"
+                } else {
+                    "No (Single-PIN mode ready)"
+                }
+                val accessibilityStatusText = if (snapshot.isAccessibilityMonitorEnabled) {
+                    "Enabled (Assists background lock transitions)"
+                } else {
+                    "Disabled (Android 10–14+ restricts background Activity starts)"
+                }
+                val deviceOwnerStatusText = if (snapshot.isDeviceOwnerProvisioned) {
+                    "Provisioned (Hardware Kiosk Lock Active)"
+                } else {
+                    "Standard App Mode (Not Device Owner)"
+                }
+                val batteryStatusText = if (snapshot.isIgnoringBatteryOptimizations) "Yes" else "No"
                 Text(
-                    text = "• Android System Keyguard Active: ${if (snapshot.isAndroidDeviceSecure) "Yes (Double-lock unless disabled in Android Settings)" else "No (Single-PIN mode ready)"}
-" +
-                        "• Accessibility Window Monitor: ${if (snapshot.isAccessibilityMonitorEnabled) "Enabled (Assists background lock transitions)" else "Disabled (Android 10–14+ restricts background Activity starts)"}
-" +
-                        "• Managed Device Owner (Lock Task Mode): ${if (snapshot.isDeviceOwnerProvisioned) "Provisioned (Hardware Kiosk Lock Active)" else "Standard App Mode (Not Device Owner)"}
-" +
-                        "• Battery Optimization Unrestricted: ${if (snapshot.isIgnoringBatteryOptimizations) "Yes" else "No"}
-" +
+                    text = listOf(
+                        "• Android System Keyguard Active: $keyguardStatusText",
+                        "• Accessibility Window Monitor: $accessibilityStatusText",
+                        "• Managed Device Owner (Lock Task Mode): $deviceOwnerStatusText",
+                        "• Battery Optimization Unrestricted: $batteryStatusText",
                         "• Last Launch Diagnostic: ${lastDiag.status} — ${lastDiag.reasonMessage}",
+                    ).joinToString(separator = "\n"),
                     style = MaterialTheme.typography.bodyLarge,
                 )
 
@@ -303,13 +317,12 @@ fun HomeScreen(
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
-                    text = "• Primary PIN Configured: ${pinManager.isPrimaryPinConfigured()} (${pinManager.getExpectedPinLength()} chars)
-" +
-                        "• Secondary Fallback PIN: ${pinManager.isSecondaryPinConfigured()}
-" +
-                        "• Salted Recovery Code Hash: ${recoveryManager.hasRecoveryCode()}
-" +
+                    text = listOf(
+                        "• Primary PIN Configured: ${pinManager.isPrimaryPinConfigured()} (${pinManager.getExpectedPinLength()} chars)",
+                        "• Secondary Fallback PIN: ${pinManager.isSecondaryPinConfigured()}",
+                        "• Salted Recovery Code Hash: ${recoveryManager.hasRecoveryCode()}",
                         "• Salted Security Question: ${recoveryManager.hasSecurityQuestion()}",
+                    ).joinToString(separator = "\n"),
                 )
                 OutlinedButton(
                     onClick = onReopenSetupWizard,
