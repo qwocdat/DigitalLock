@@ -66,9 +66,9 @@ import com.digitallock.lock.LockUiState
 import com.digitallock.lock.PinVerificationPhase
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import androidx.compose.material3.Text
+import component.liquid.LayerBackdrop
+import component.liquid.rememberLayerBackdrop
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
