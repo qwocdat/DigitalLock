@@ -30,16 +30,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/**
- * Fullscreen LockActivity hosting the iOS 27 Inspired Liquid Glass PIN Engine.
- *
- * Uses modern Android window APIs:
- * - `setShowWhenLocked(true)`
- * - `setTurnScreenOn(true)`
- * - `WindowInsetsControllerCompat` for immersive system bar hiding
- * - `FLAG_SECURE` to protect sensitive PIN input from external screen recording while
- *   keeping internal Compose `LayerBackdrop` GPU refraction fully operational.
- */
 class LockActivity : FragmentActivity() {
 
     private lateinit var credentialStore: CredentialStore
@@ -80,7 +70,6 @@ class LockActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Modern API 27+ lockscreen window attributes (no deprecated FLAG_SHOW_WHEN_LOCKED)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
 
@@ -102,7 +91,6 @@ class LockActivity : FragmentActivity() {
 
         configureImmersiveFullscreen()
 
-        // Block back navigation while session is locked
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -110,7 +98,6 @@ class LockActivity : FragmentActivity() {
                     if (_uiState.value.activeRecoverySheet != ActiveRecoverySheet.NONE) {
                         _uiState.update { it.copy(activeRecoverySheet = ActiveRecoverySheet.NONE) }
                     }
-                    // Otherwise consume back press while locked
                 }
             },
         )
@@ -171,9 +158,9 @@ class LockActivity : FragmentActivity() {
             isAlphanumeric = isAlpha,
             phase = if (remainingSec > 0L) PinVerificationPhase.LOCKOUT_COOLDOWN else PinVerificationPhase.IDLE_ENTERING,
             statusPrompt = if (remainingSec > 0L) {
-                "Too many attempts. Try again in ${remainingSec}s"
+                "Nhập sai quá nhiều lần. Thử lại sau ${remainingSec} giây"
             } else {
-                "Swipe up for Biometrics or Enter Passcode"
+                "Vuốt lên để mở bằng Sinh trắc học hoặc Nhập PIN"
             },
             failedAttempts = credentialStore.getFailedAttempts(),
             lockoutRemainingSeconds = remainingSec,
@@ -185,11 +172,6 @@ class LockActivity : FragmentActivity() {
         }
     }
 
-    /**
-     * Appends a single digit to the current PIN buffer.
-     * Debounces input while `phase != IDLE_ENTERING` so rapid taps cannot cause unintended
-     * extra submissions during verification or error animations.
-     */
     private fun onDigitInput(digitChar: Char) {
         val current = _uiState.value
         if (current.phase != PinVerificationPhase.IDLE_ENTERING) return
@@ -214,7 +196,7 @@ class LockActivity : FragmentActivity() {
         _uiState.update {
             it.copy(
                 phase = PinVerificationPhase.VERIFYING,
-                statusPrompt = "Verifying Passcode…",
+                statusPrompt = "Đang xác thực mã PIN…",
             )
         }
         lifecycleScope.launch {
@@ -230,9 +212,9 @@ class LockActivity : FragmentActivity() {
                             failedAttempts = outcome.failedAttempts,
                             lockoutRemainingSeconds = outcome.lockoutRemainingSeconds,
                             statusPrompt = if (outcome.lockoutRemainingSeconds > 0L) {
-                                "Incorrect Passcode. Locked for ${outcome.lockoutRemainingSeconds}s"
+                                "Sai mã PIN. Tạm khóa ${outcome.lockoutRemainingSeconds} giây"
                             } else {
-                                "Incorrect Passcode (${outcome.failedAttempts} failed)"
+                                "Mã PIN không đúng (Đã sai ${outcome.failedAttempts} lần)"
                             },
                         )
                     }
@@ -259,7 +241,7 @@ class LockActivity : FragmentActivity() {
     private fun triggerBiometricUnlock() {
         val settings = settingsRepository.currentSettings()
         if (!settings.biometricEnabled) {
-            _uiState.update { it.copy(statusPrompt = "Biometric unlock is not enabled in Settings") }
+            _uiState.update { it.copy(statusPrompt = "Mở khóa sinh trắc học chưa được bật trong Cài đặt") }
             return
         }
         authManager.triggerBiometricPrompt(
@@ -287,7 +269,7 @@ class LockActivity : FragmentActivity() {
             }
             else -> {
                 _uiState.update {
-                    it.copy(statusPrompt = "Invalid Recovery Code. Please verify and try again.")
+                    it.copy(statusPrompt = "Mã khôi phục không hợp lệ. Vui lòng kiểm tra lại.")
                 }
             }
         }
@@ -303,7 +285,7 @@ class LockActivity : FragmentActivity() {
             }
             else -> {
                 _uiState.update {
-                    it.copy(statusPrompt = "Incorrect Security Question answer.")
+                    it.copy(statusPrompt = "Câu trả lời bảo mật không chính xác.")
                 }
             }
         }
@@ -313,7 +295,7 @@ class LockActivity : FragmentActivity() {
         _uiState.update {
             it.copy(
                 phase = PinVerificationPhase.UNLOCKING_SUCCESS,
-                statusPrompt = "Unlocked",
+                statusPrompt = "Đã mở khóa",
             )
         }
         delay(320L)
@@ -342,7 +324,7 @@ class LockActivity : FragmentActivity() {
                             enteredPin = "",
                             phase = PinVerificationPhase.IDLE_ENTERING,
                             lockoutRemainingSeconds = 0L,
-                            statusPrompt = "Swipe up for Biometrics or Enter Passcode",
+                            statusPrompt = "Vuốt lên để mở bằng Sinh trắc học hoặc Nhập PIN",
                         )
                     }
                     break
@@ -352,7 +334,7 @@ class LockActivity : FragmentActivity() {
                             enteredPin = "",
                             phase = PinVerificationPhase.LOCKOUT_COOLDOWN,
                             lockoutRemainingSeconds = remaining,
-                            statusPrompt = "Try again in ${remaining}s (or use Recovery)",
+                            statusPrompt = "Thử lại sau ${remaining} giây (hoặc nhấn Khôi phục)",
                         )
                     }
                 }
