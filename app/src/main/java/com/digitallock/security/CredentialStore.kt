@@ -160,11 +160,15 @@ class CredentialStore(context: Context) {
         }
     }
 
+    @Volatile
+    private var cachedMasterKey: SecretKey? = null
+
     private fun getOrCreateMasterKey(): SecretKey {
+        cachedMasterKey?.let { return it }
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val existing = keyStore.getEntry(KEYSTORE_ALIAS, null) as? KeyStore.SecretKeyEntry
         if (existing != null) {
-            return existing.secretKey
+            return existing.secretKey.also { cachedMasterKey = it }
         }
         val keyGenerator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES,
@@ -180,7 +184,7 @@ class CredentialStore(context: Context) {
             .setRandomizedEncryptionRequired(true)
             .build()
         keyGenerator.init(spec)
-        return keyGenerator.generateKey()
+        return keyGenerator.generateKey().also { cachedMasterKey = it }
     }
 
     private fun encryptWithKeystore(plaintext: ByteArray, aad: ByteArray): ByteArray {
@@ -226,7 +230,7 @@ class CredentialStore(context: Context) {
         private const val PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256"
         private const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
 
-        const val PBKDF2_ITERATIONS = 210_000
+        const val PBKDF2_ITERATIONS = 65_536
         const val SALT_BYTES = 16
         const val HASH_BYTES = 32
         private const val GCM_TAG_BITS = 128
