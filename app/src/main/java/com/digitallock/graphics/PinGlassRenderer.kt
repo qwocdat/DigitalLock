@@ -6,9 +6,6 @@ package com.digitallock.graphics
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,8 +20,6 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,7 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -59,7 +54,6 @@ import component.liquid.innerShadow
 import component.liquid.lens
 import component.liquid.rememberDeviceTilt
 import component.liquid.vibrancy
-import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -75,17 +69,17 @@ private const val GRAVITY_ANGLE_STEP_RAD = (3.0 * PI / 180.0).toFloat()
 data class PinGlassConfig(
     val buttonSize: Dp = 82.dp,
     val restingRefractionHeight: Dp = 24.dp,
-    val pressedRefractionHeight: Dp = 30.dp,
+    val pressedRefractionHeight: Dp = 32.dp,
     val restingRefractionAmount: Dp = 28.dp,
-    val pressedRefractionAmount: Dp = 36.dp,
+    val pressedRefractionAmount: Dp = 38.dp,
     val depthEffect: Boolean = true,
-    val restingChromaticAberration: Float = 0.18f,
-    val pressedChromaticAberration: Float = 0.28f,
-    val microDiffusionBlurRadius: Dp = 0.8.dp,
-    val restingHighlightAlpha: Float = 0.85f,
+    val restingChromaticAberration: Float = 0.16f,
+    val pressedChromaticAberration: Float = 0.24f,
+    val microDiffusionBlurRadius: Dp = 0.6.dp,
+    val restingHighlightAlpha: Float = 0.88f,
     val pressedHighlightAlpha: Float = 1.0f,
     val restingInnerShadowRadius: Dp = 10.dp,
-    val pressedInnerShadowRadius: Dp = 16.dp,
+    val pressedInnerShadowRadius: Dp = 18.dp,
 ) {
     companion object {
         @Stable
@@ -94,20 +88,20 @@ data class PinGlassConfig(
 }
 
 private val pinRimSpecularBase: Highlight = Highlight(
-    width = 1.4.dp,
+    width = 1.5.dp,
     alpha = 1f,
     style = BloomStroke(
-        color = Color.White.copy(alpha = 0.14f),
+        color = Color.White.copy(alpha = 0.22f),
         innerBlurRadius = 2.5.dp,
         primaryLight = LightSource(
             position = LightPosition(0.28f, 0.12f, -0.06f),
             color = Color.White,
-            intensity = 1.15f,
+            intensity = 1.25f,
         ),
         secondaryLight = LightSource(
             position = LightPosition(0.75f, 0.88f, -0.45f),
-            color = Color(0xFF8CEBFF),
-            intensity = 0.65f,
+            color = Color.White,
+            intensity = 0.80f,
         ),
         dualPeak = true,
     ),
@@ -169,26 +163,35 @@ object PinGlassRenderer {
         keyAngleOffsetDegrees: Float = -35f,
         externalGlowIntensity: Float = 0f,
         localPointerGlowOffset: Offset? = null,
+        dragOffsetPx: Offset = Offset.Zero,
         onButtonPositioned: ((LayoutCoordinates) -> Unit)? = null,
         contentDescriptionText: String,
         onClick: () -> Unit,
         modifier: Modifier = Modifier,
         content: @Composable () -> Unit,
     ) {
-        val scope = rememberCoroutineScope()
-        val currentOnClick by rememberUpdatedState(onClick)
-        val currentEnabled by rememberUpdatedState(enabled)
-
         val pressOpticalProgress = remember { Animatable(0f) }
+        val animatedDragX = remember { Animatable(0f) }
+        val animatedDragY = remember { Animatable(0f) }
 
         LaunchedEffect(externalGlowIntensity) {
             if (externalGlowIntensity > 0.01f) {
-                pressOpticalProgress.snapTo(maxOf(pressOpticalProgress.value, externalGlowIntensity))
-            } else if (pressOpticalProgress.value > 0f && externalGlowIntensity == 0f) {
+                pressOpticalProgress.snapTo(externalGlowIntensity)
+            } else if (pressOpticalProgress.value > 0f) {
                 pressOpticalProgress.animateTo(
                     targetValue = 0f,
-                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                    animationSpec = spring(dampingRatio = 0.78f, stiffness = 400f),
                 )
+            }
+        }
+
+        LaunchedEffect(dragOffsetPx) {
+            if (dragOffsetPx != Offset.Zero) {
+                animatedDragX.snapTo(dragOffsetPx.x)
+                animatedDragY.snapTo(dragOffsetPx.y)
+            } else {
+                animatedDragX.animateTo(0f, spring(dampingRatio = 0.65f, stiffness = 500f))
+                animatedDragY.animateTo(0f, spring(dampingRatio = 0.65f, stiffness = 500f))
             }
         }
 
@@ -217,31 +220,17 @@ object PinGlassRenderer {
                         Modifier
                     }
                 )
+                .graphicsLayer {
+                    translationX = animatedDragX.value
+                    translationY = animatedDragY.value
+                }
                 .semantics(mergeDescendants = true) {
                     role = Role.Button
                     contentDescription = contentDescriptionText
-                    if (currentEnabled) {
+                    if (enabled) {
                         onClick {
-                            currentOnClick()
+                            onClick()
                             true
-                        }
-                    }
-                }
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        if (!currentEnabled) return@awaitEachGesture
-                        // Register digit immediately on finger-down for 0ms iOS-like responsiveness!
-                        currentOnClick()
-                        scope.launch {
-                            pressOpticalProgress.snapTo(1f)
-                        }
-                        waitForUpOrCancellation()
-                        scope.launch {
-                            pressOpticalProgress.animateTo(
-                                targetValue = 0f,
-                                animationSpec = spring(dampingRatio = 0.80f, stiffness = 450f),
-                            )
                         }
                     }
                 }
@@ -305,12 +294,18 @@ object PinGlassRenderer {
                                     )
                                 }
                                 base.copy(
-                                    width = lerp(1.3f, 2.2f, p).dp,
+                                    width = lerp(1.5f, 2.8f, p).dp,
                                     alpha = alpha,
                                     style = style.copy(
+                                        color = Color.White.copy(alpha = lerp(0.22f, 0.78f, p)),
                                         primaryLight = style.primaryLight.copy(
                                             position = lightPos,
-                                            intensity = lerp(1.15f, 1.85f, p),
+                                            color = Color.White,
+                                            intensity = lerp(1.25f, 2.40f, p),
+                                        ),
+                                        secondaryLight = style.secondaryLight.copy(
+                                            color = Color.White,
+                                            intensity = lerp(0.80f, 1.80f, p),
                                         ),
                                     ),
                                 )
@@ -318,19 +313,19 @@ object PinGlassRenderer {
                             layerBlock = null,
                             onDrawSurface = {
                                 val p = maxOf(pressOpticalProgress.value, externalGlowIntensity).coerceIn(0f, 1f)
-                                // Keep the glass crystal-clear at rest; when touched or dragged over,
-                                // emit an iOS 27 interactive luminous glow following the touch/drag coordinate!
+                                // Deep, intense pure-white glass luminance ("sáng đậm", zero neon/fluorescent tint!)
                                 if (p > 0.01f) {
-                                    val glowCenter = localPointerGlowOffset ?: Offset(size.width * 0.5f, size.height * 0.45f)
+                                    val glowCenter = localPointerGlowOffset ?: Offset(size.width * 0.5f, size.height * 0.5f)
                                     drawCircle(
                                         brush = Brush.radialGradient(
                                             colors = listOf(
-                                                Color.White.copy(alpha = 0.34f * p),
-                                                Color(0xFFA8ECFF).copy(alpha = 0.18f * p),
+                                                Color.White.copy(alpha = 0.68f * p),
+                                                Color.White.copy(alpha = 0.42f * p),
+                                                Color.White.copy(alpha = 0.16f * p),
                                                 Color.Transparent,
                                             ),
                                             center = glowCenter,
-                                            radius = size.minDimension * 0.72f,
+                                            radius = size.minDimension * 0.78f,
                                         ),
                                     )
                                 }
@@ -352,7 +347,7 @@ object PinGlassRenderer {
                     InnerShadow(
                         radius = shadowRadius,
                         offset = DpOffset(0.dp, (-3f).dp),
-                        color = Color.White.copy(alpha = lerp(0.18f, 0.42f, p)),
+                        color = Color.White.copy(alpha = lerp(0.24f, 0.75f, p)),
                         alpha = 1f,
                     )
                 },
