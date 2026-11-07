@@ -1,22 +1,22 @@
 package com.digitallock.lock
 
+import android.app.ActivityManager
 import android.app.admin.DevicePolicyManager
 import android.graphics.Bitmap
-import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
+import com.digitallock.accessibility.AccessibilityMonitor
 import com.digitallock.data.LockRepository
 import com.digitallock.data.SettingsRepository
-import com.digitallock.graphics.LockBackgroundRenderer
+import com.digitallock.graphics.BackdropCaptureStore
 import com.digitallock.security.AuthenticationManager
 import com.digitallock.security.CredentialStore
 import com.digitallock.security.PinManager
@@ -24,15 +24,13 @@ import com.digitallock.security.RecoveryManager
 import com.digitallock.ui.lock.LiquidGlassLockScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.withContext
-import com.digitallock.service.MonitorService
-import com.digitallock.graphics.BackdropCaptureStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class LockActivity : FragmentActivity() {
 
@@ -47,35 +45,12 @@ class LockActivity : FragmentActivity() {
     private val _uiState = MutableStateFlow(LockUiState())
     val uiState: StateFlow<LockUiState> = _uiState.asStateFlow()
 
-    private val _mediaProjectionBitmap = MutableStateFlow<Bitmap?>(null)
+    private val _capturedBackdropBitmap = MutableStateFlow<Bitmap?>(null)
     private var countdownJob: Job? = null
     private var isLockTaskActive = false
 
-    private val mediaProjectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK && result.data != null) {
-            val mpm = getSystemService(MediaProjectionManager::class.java)
-            val projection = mpm?.getMediaProjection(result.resultCode, result.data!!)
-            if (projection != null) {
-                val metrics = resources.displayMetrics
-                LockBackgroundRenderer.captureSingleFrameFromMediaProjection(
-                    mediaProjection = projection,
-                    width = metrics.widthPixels,
-                    height = metrics.heightPixels,
-                    densityDpi = metrics.densityDpi,
-                ) { capturedBitmap ->
-                    _mediaProjectionBitmap.value = capturedBitmap
-                }
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        setShowWhenLocked(true)
-        setTurnScreenOn(true)
 
         credentialStore = CredentialStore(this)
         pinManager = PinManager(credentialStore)
@@ -84,6 +59,17 @@ class LockActivity : FragmentActivity() {
         settingsRepository = SettingsRepository(this)
         lockRepository = LockRepository(this)
         lockController = LockController(this, settingsRepository, lockRepository)
+
+        // If AccessibilityMonitor is connected and this is not a biometric-dialog helper call,
+        // delegate directly to the un-dismissible Accessibility Lock Surface!
+        val biometricOnly = intent?.getBooleanExtra(EXTRA_BIOMETRIC_ONLY, false) == true
+        val a11y = AccessibilityMonitor.instance
+        if (a11y != null && !biometricOnly) {
+            SessionManager.lockSession()
+            a11y.showUnDismissibleLockSurface()
+            finish()
+            return
+        }
 
         val settings = settingsRepository.currentSettings()
         if (settings.preventScreenshotsOnLock) {
@@ -110,19 +96,23 @@ class LockActivity : FragmentActivity() {
         SessionManager.onLockActivityVisibilityChanged(true)
         initializeLockUiState()
 
+        if (biometricOnly) {
+            triggerBiometricUnlock(finishOnCancel = true)
+        }
+
         setContent {
             LiquidGlassLockScreen(
                 uiStateFlow = uiState,
                 settingsFlow = settingsRepository.settingsFlow,
-                mediaProjectionBitmapFlow = _mediaProjectionBitmap,
+                mediaProjectionBitmapFlow = _capturedBackdropBitmap,
                 onDigitPressed = ::onDigitInput,
                 onBackspacePressed = ::onBackspaceInput,
-                onBiometricRequested = ::triggerBiometricUnlock,
+                onBiometricRequested = { triggerBiometricUnlock(finishOnCancel = false) },
                 onOpenRecoverySheet = ::openRecoverySheet,
                 onDismissRecoverySheet = { openRecoverySheet(ActiveRecoverySheet.NONE) },
                 onSubmitRecoveryCode = ::submitRecoveryCode,
                 onSubmitSecurityAnswer = ::submitSecurityQuestionAnswer,
-                onRequestMediaProjectionBackdrop = ::requestConsentingMediaProjectionCapture,
+                onRequestMediaProjectionBackdrop = ::captureWallpaperOnce,
             )
         }
     }
@@ -139,6 +129,18 @@ class LockActivity : FragmentActivity() {
         syncLockoutCountdown()
     }
 
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (SessionManager.shouldRequireLockNow()) {
+            AccessibilityMonitor.instance?.showUnDismissibleLockSurface()
+            val am = getSystemService(ActivityManager::class.java)
+            try {
+                am?.moveTaskToFront(taskId, 0)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     override fun onStop() {
         super.onStop()
         SessionManager.onLockActivityVisibilityChanged(false)
@@ -147,7 +149,6 @@ class LockActivity : FragmentActivity() {
     override fun onDestroy() {
         SessionManager.onLockActivityVisibilityChanged(false)
         countdownJob?.cancel()
-        _mediaProjectionBitmap.value = null
         super.onDestroy()
     }
 
@@ -164,7 +165,7 @@ class LockActivity : FragmentActivity() {
             statusPrompt = if (remainingSec > 0L) {
                 "Nhập sai quá nhiều lần. Thử lại sau ${remainingSec} giây"
             } else {
-                "Vuốt lên để mở bằng Sinh trắc học hoặc Nhập PIN"
+                "Vuốt lên để mở bằng Sinh trắc học hoặc Nhập mật khẩu"
             },
             failedAttempts = credentialStore.getFailedAttempts(),
             lockoutRemainingSeconds = remainingSec,
@@ -200,11 +201,13 @@ class LockActivity : FragmentActivity() {
         _uiState.update {
             it.copy(
                 phase = PinVerificationPhase.VERIFYING,
-                statusPrompt = "Đang xác thực mã PIN…",
+                statusPrompt = "Đang xác thực…",
             )
         }
         lifecycleScope.launch {
-            val outcome = withContext(Dispatchers.Default) { authManager.authenticatePin(candidatePin) }
+            val outcome = withContext(Dispatchers.Default) {
+                authManager.authenticatePin(candidatePin)
+            }
             when (outcome) {
                 is AuthenticationManager.AuthOutcome.Authenticated -> {
                     completeUnlockTransition()
@@ -223,7 +226,7 @@ class LockActivity : FragmentActivity() {
                             },
                         )
                     }
-                    delay(480L)
+                    delay(420L)
                     if (outcome.lockoutRemainingSeconds > 0L) {
                         syncLockoutCountdown()
                     } else {
@@ -243,19 +246,22 @@ class LockActivity : FragmentActivity() {
         }
     }
 
-    private fun triggerBiometricUnlock() {
+    private fun triggerBiometricUnlock(finishOnCancel: Boolean) {
         val settings = settingsRepository.currentSettings()
         if (!settings.biometricEnabled) {
-            _uiState.update { it.copy(statusPrompt = "Mở khóa sinh trắc học chưa được bật trong Cài đặt") }
+            if (finishOnCancel) finish()
+            else _uiState.update { it.copy(statusPrompt = "Mở khóa sinh trắc học chưa được bật trong Cài đặt") }
             return
         }
         authManager.triggerBiometricPrompt(
             activity = this,
             onSuccess = {
+                AccessibilityMonitor.instance?.dismissLockSurfaceOnSuccess()
                 lifecycleScope.launch { completeUnlockTransition() }
             },
             onErrorOrCancel = { errMsg ->
-                _uiState.update { it.copy(statusPrompt = errMsg) }
+                if (finishOnCancel) finish()
+                else _uiState.update { it.copy(statusPrompt = errMsg) }
             },
         )
     }
@@ -265,14 +271,14 @@ class LockActivity : FragmentActivity() {
     }
 
     private fun submitRecoveryCode(code: String) {
-        when (authManager.authenticateWithRecoveryCode(code)) {
-            is AuthenticationManager.AuthOutcome.Authenticated -> {
-                lifecycleScope.launch {
-                    _uiState.update { it.copy(activeRecoverySheet = ActiveRecoverySheet.NONE) }
-                    completeUnlockTransition()
-                }
+        lifecycleScope.launch {
+            val res = withContext(Dispatchers.Default) {
+                authManager.authenticateWithRecoveryCode(code)
             }
-            else -> {
+            if (res is AuthenticationManager.AuthOutcome.Authenticated) {
+                _uiState.update { it.copy(activeRecoverySheet = ActiveRecoverySheet.NONE) }
+                completeUnlockTransition()
+            } else {
                 _uiState.update {
                     it.copy(statusPrompt = "Mã khôi phục không hợp lệ. Vui lòng kiểm tra lại.")
                 }
@@ -281,14 +287,14 @@ class LockActivity : FragmentActivity() {
     }
 
     private fun submitSecurityQuestionAnswer(answer: String) {
-        when (authManager.authenticateWithSecurityQuestion(answer)) {
-            is AuthenticationManager.AuthOutcome.Authenticated -> {
-                lifecycleScope.launch {
-                    _uiState.update { it.copy(activeRecoverySheet = ActiveRecoverySheet.NONE) }
-                    completeUnlockTransition()
-                }
+        lifecycleScope.launch {
+            val res = withContext(Dispatchers.Default) {
+                authManager.authenticateWithSecurityQuestion(answer)
             }
-            else -> {
+            if (res is AuthenticationManager.AuthOutcome.Authenticated) {
+                _uiState.update { it.copy(activeRecoverySheet = ActiveRecoverySheet.NONE) }
+                completeUnlockTransition()
+            } else {
                 _uiState.update {
                     it.copy(statusPrompt = "Câu trả lời bảo mật không chính xác.")
                 }
@@ -303,9 +309,9 @@ class LockActivity : FragmentActivity() {
                 statusPrompt = "Đã mở khóa",
             )
         }
-        delay(140L)
+        delay(150L)
         SessionManager.unlockSession()
-        MonitorService.requestBackdropCapture(applicationContext, 380L)
+        AccessibilityMonitor.instance?.dismissLockSurfaceOnSuccess()
         if (isLockTaskActive) {
             try {
                 stopLockTask()
@@ -330,7 +336,7 @@ class LockActivity : FragmentActivity() {
                             enteredPin = "",
                             phase = PinVerificationPhase.IDLE_ENTERING,
                             lockoutRemainingSeconds = 0L,
-                            statusPrompt = "Vuốt lên để mở bằng Sinh trắc học hoặc Nhập PIN",
+                            statusPrompt = "Vuốt lên để mở bằng Sinh trắc học hoặc Nhập mật khẩu",
                         )
                     }
                     break
@@ -340,7 +346,7 @@ class LockActivity : FragmentActivity() {
                             enteredPin = "",
                             phase = PinVerificationPhase.LOCKOUT_COOLDOWN,
                             lockoutRemainingSeconds = remaining,
-                            statusPrompt = "Thử lại sau ${remaining} giây (hoặc nhấn Khôi phục)",
+                            statusPrompt = "Thử lại sau ${remaining} giây (hoặc nhấn Khẩn cấp)",
                         )
                     }
                 }
@@ -364,9 +370,15 @@ class LockActivity : FragmentActivity() {
         }
     }
 
-    private fun requestConsentingMediaProjectionCapture() {
-        val mpm = getSystemService(MediaProjectionManager::class.java) ?: return
-        mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+    private fun captureWallpaperOnce() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val bmp = BackdropCaptureStore.captureLockWallpaperOnceFromSystem(applicationContext)
+            if (bmp != null) {
+                _capturedBackdropBitmap.value = bmp
+            } else {
+                AccessibilityMonitor.instance?.captureLockscreenOnceIfNeeded(forceCapture = true)
+            }
+        }
     }
 
     private fun configureImmersiveFullscreen() {
@@ -375,5 +387,9 @@ class LockActivity : FragmentActivity() {
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
+    companion object {
+        const val EXTRA_BIOMETRIC_ONLY = "extra_biometric_only"
     }
 }
