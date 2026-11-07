@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
@@ -204,6 +205,7 @@ object PinGlassRenderer {
         )
 
         val buttonShape: Shape = CircleShape
+        val buttonSizePx = with(LocalDensity.current) { config.buttonSize.toPx().coerceAtLeast(1f) }
 
         Box(
             modifier = modifier
@@ -289,10 +291,10 @@ object PinGlassRenderer {
                                 val base = rotatedHighlight.value
                                 val style = base.style as BloomStroke
                                 val pointer = localPointerGlowOffset
-                                val lightPos = if (pointer != null && size.width > 0f && size.height > 0f) {
+                                val lightPos = if (pointer != null) {
                                     LightPosition(
-                                        x = (pointer.x / size.width).coerceIn(0f, 1f),
-                                        y = (pointer.y / size.height).coerceIn(0f, 1f),
+                                        x = (pointer.x / buttonSizePx).coerceIn(0f, 1f),
+                                        y = (pointer.y / buttonSizePx).coerceIn(0f, 1f),
                                         z = style.primaryLight.position.z,
                                     )
                                 } else {
