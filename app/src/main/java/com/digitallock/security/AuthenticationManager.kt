@@ -6,17 +6,6 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 
-/**
- * Coordinates all DigitalLock authentication and recovery pathways:
- * 1. Primary PIN
- * 2. Secondary PIN (independent fallback)
- * 3. Recovery Code (one-time displayed CSPRNG token)
- * 4. Security Question (normalized & salted PBKDF2 hash)
- * 5. Strong Biometric Authentication (`BiometricPrompt` with `BIOMETRIC_STRONG`)
- *
- * Enforces persistent rate-limiting with progressive exponential cooldowns while always
- * keeping recovery pathways accessible so the user is never permanently bricked.
- */
 class AuthenticationManager(
     private val context: Context,
     val credentialStore: CredentialStore,
@@ -47,9 +36,6 @@ class AuthenticationManager(
         return ((lockoutUntil - nowEpochMs + 999L) / 1000L).coerceAtLeast(1L)
     }
 
-    /**
-     * Authenticates a PIN entry against either Primary PIN or Secondary PIN.
-     */
     fun authenticatePin(
         candidatePin: String,
         nowEpochMs: Long = System.currentTimeMillis(),
@@ -81,10 +67,6 @@ class AuthenticationManager(
         )
     }
 
-    /**
-     * Recovery pathways bypass standard PIN cooldowns so that a user locked out by forgotten PIN
-     * attempts can still recover access using their high-entropy Recovery Code or Security Question.
-     */
     fun authenticateWithRecoveryCode(code: String): AuthOutcome {
         return if (recoveryManager.verifyRecoveryCode(code)) {
             credentialStore.resetFailedAttempts()
@@ -119,7 +101,7 @@ class AuthenticationManager(
         onErrorOrCancel: (String) -> Unit,
     ) {
         if (!isStrongBiometricAvailable()) {
-            onErrorOrCancel("Class 3 (Strong) Biometrics not enrolled or unavailable on this device.")
+            onErrorOrCancel("Thiết bị chưa đăng ký vân tay hoặc sinh trắc học mạnh.")
             return
         }
         val executor = ContextCompat.getMainExecutor(activity)
@@ -140,9 +122,9 @@ class AuthenticationManager(
             },
         )
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("DigitalLock Biometric Unlock")
-            .setSubtitle("Verify your identity to unlock DigitalLock")
-            .setNegativeButtonText("Enter Passcode")
+            .setTitle("Mở khóa DigitalLock")
+            .setSubtitle("Xác thực sinh trắc học để mở khóa")
+            .setNegativeButtonText("Nhập mã PIN")
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .setConfirmationRequired(false)
             .build()
