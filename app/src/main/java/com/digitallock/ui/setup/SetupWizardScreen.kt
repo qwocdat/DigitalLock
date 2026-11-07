@@ -1,9 +1,18 @@
 package com.digitallock.ui.setup
 
+import android.Manifest
+import android.app.admin.DevicePolicyManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -55,16 +65,76 @@ import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
 import com.digitallock.ui.components.expressiveSpring
 
-/**
- * 3-Step Material 3 Expressive Setup Wizard:
- * - Step 1: Android System Lock Inspection via `KeyguardManager.isDeviceSecure`.
- *           Offers Standalone Single-Lock Mode (guiding user to Android Security Settings so
- *           they do not enter two PINs in a row) vs. Coexist with Android Keyguard Mode.
- * - Step 2: Primary PIN creation (4–12 digits or alphanumeric, confirmation, PBKDF2 + Keystore).
- * - Step 3: Independent Recovery setup (Secondary PIN != Primary PIN, one-time copyable
- *           CSPRNG Recovery Code, normalized Security Question with entropy warning, and
- *           opt-in Class 3 Biometric toggle).
- */
+fun openScreenLockSettingsDirectly(context: Context) {
+    val intents = listOf(
+        Intent(DevicePolicyManager.ACTION_SET_NEW_PASSWORD),
+        Intent("android.settings.BIOMETRIC_ENROLL"),
+        Intent(Settings.ACTION_SECURITY_SETTINGS),
+    )
+    for (intent in intents) {
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            return
+        } catch (_: Throwable) {
+        }
+    }
+}
+
+fun requestIgnoreBatteryOptimizationsDirectly(context: Context) {
+    try {
+        val intent = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:${context.packageName}"),
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (_: Throwable) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Throwable) {
+        }
+    }
+}
+
+fun openHyperOsAutostartAndPermissions(context: Context) {
+    val miuiIntents = listOf(
+        Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+            setClassName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.permissions.PermissionsEditorActivity",
+            )
+            putExtra("extra_pkgname", context.packageName)
+        },
+        Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+            putExtra("extra_pkgname", context.packageName)
+        },
+        Intent().apply {
+            component = ComponentName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            )
+        },
+        Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:${context.packageName}"),
+        ),
+    )
+    for (intent in miuiIntents) {
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            return
+        } catch (_: Throwable) {
+        }
+    }
+}
+
 @Composable
 fun SetupWizardScreen(
     lockRepository: LockRepository,
@@ -79,6 +149,25 @@ fun SetupWizardScreen(
 
     var currentStep by remember { mutableIntStateOf(1) }
     var snapshot by remember { mutableStateOf(lockRepository.querySystemSecuritySnapshot()) }
+    var notificationGranted by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        notificationGranted = granted
+    }
+
     var selectedMode by remember {
         mutableStateOf(
             if (snapshot.isAndroidDeviceSecure) {
@@ -89,7 +178,6 @@ fun SetupWizardScreen(
         )
     }
 
-    // Re-check KeyguardManager automatically when user returns from Android Security Settings
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -97,6 +185,12 @@ fun SetupWizardScreen(
                 snapshot = updated
                 if (!updated.isAndroidDeviceSecure) {
                     selectedMode = LockOperationMode.STANDALONE_SINGLE_LOCK
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notificationGranted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.POST_NOTIFICATIONS,
+                    ) == PackageManager.PERMISSION_GRANTED
                 }
             }
         }
@@ -112,7 +206,7 @@ fun SetupWizardScreen(
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         Text(
-            text = "DigitalLock Setup • Step $currentStep of 3",
+            text = "Thiết lập DigitalLock • Bước $currentStep / 3",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.primary,
         )
@@ -126,8 +220,9 @@ fun SetupWizardScreen(
             label = "SetupWizardTransition",
         ) { step ->
             when (step) {
-                1 -> Step1KeyguardCheck(
+                1 -> Step1KeyguardAndPermissionsCheck(
                     snapshot = snapshot,
+                    notificationGranted = notificationGranted,
                     onRefreshCheck = {
                         val updated = lockRepository.querySystemSecuritySnapshot()
                         snapshot = updated
@@ -135,12 +230,29 @@ fun SetupWizardScreen(
                             selectedMode = LockOperationMode.STANDALONE_SINGLE_LOCK
                         }
                     },
-                    onOpenAndroidSecuritySettings = {
-                        try {
-                            context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
-                        } catch (_: Throwable) {
-                            context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                    onOpenScreenLockSettings = {
+                        openScreenLockSettingsDirectly(context)
+                    },
+                    onRequestNotificationPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
+                    },
+                    onRequestIgnoreBatteryOptimization = {
+                        requestIgnoreBatteryOptimizationsDirectly(context)
+                    },
+                    onOpenAccessibilitySettings = {
+                        try {
+                            context.startActivity(
+                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                        } catch (_: Throwable) {
+                        }
+                    },
+                    onOpenHyperOsPermissions = {
+                        openHyperOsAutostartAndPermissions(context)
                     },
                     onChooseStandalone = {
                         selectedMode = LockOperationMode.STANDALONE_SINGLE_LOCK
@@ -173,19 +285,25 @@ fun SetupWizardScreen(
 }
 
 @Composable
-private fun Step1KeyguardCheck(
+private fun Step1KeyguardAndPermissionsCheck(
     snapshot: LockRepository.SystemSecuritySnapshot,
+    notificationGranted: Boolean,
     onRefreshCheck: () -> Unit,
-    onOpenAndroidSecuritySettings: () -> Unit,
+    onOpenScreenLockSettings: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
+    onRequestIgnoreBatteryOptimization: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpenHyperOsPermissions: () -> Unit,
     onChooseStandalone: () -> Unit,
     onChooseCoexist: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
-            text = "System Lock Inspection",
+            text = "Kiểm tra Khóa hệ thống & Cấp quyền",
             style = MaterialTheme.typography.headlineLarge,
         )
 
+        // Card 1: Kiểm tra khóa màn hình hệ thống (Mở thẳng cài đặt Mật khẩu / Khóa màn hình, không mở Play Protect)
         ElevatedCard(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.elevatedCardColors(
@@ -199,9 +317,9 @@ private fun Step1KeyguardCheck(
             ) {
                 Text(
                     text = if (snapshot.isAndroidDeviceSecure) {
-                        "Android System Lock is Currently Active"
+                        "Khóa màn hình hệ thống Android đang BẬT"
                     } else {
-                        "Android System Lock is Disabled (Ready for Single-PIN Mode)"
+                        "Khóa màn hình hệ thống đã TẮT (Sẵn sàng chế độ 1 lớp khóa)"
                     },
                     style = MaterialTheme.typography.titleLarge,
                     color = if (snapshot.isAndroidDeviceSecure) {
@@ -213,42 +331,102 @@ private fun Step1KeyguardCheck(
 
                 Text(
                     text = if (snapshot.isAndroidDeviceSecure) {
-                        "KeyguardManager detected an active system credential (PIN, Password, or Pattern). Standard Android security rules prohibit third-party apps from automatically disabling or replacing the system Keyguard."
+                        "Thiết bị đang bật khóa màn hình của hệ thống (PIN, Mật khẩu hoặc Hình vẽ). Để không phải nhập 2 lần mật khẩu liên tiếp, hãy nhấn nút bên dưới để mở thẳng phần Chọn khóa màn hình và chuyển về 'Không' (None) hoặc 'Vuốt' (Swipe)."
                     } else {
-                        "KeyguardManager verified that no system PIN, Password, or Pattern is active. You can use DigitalLock as your sole PIN prompt without entering two passwords in a row."
+                        "Đã xác nhận tắt khóa màn hình hệ thống! Bạn sẽ chỉ cần nhập duy nhất 1 lớp mã PIN Liquid Glass của DigitalLock."
                     },
                     style = MaterialTheme.typography.bodyLarge,
                 )
 
                 if (snapshot.isAndroidDeviceSecure) {
-                    OutlinedButton(
-                        onClick = onOpenAndroidSecuritySettings,
+                    Button(
+                        onClick = onOpenScreenLockSettings,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("1. Open Android Security Settings to Turn Off System Lock")
+                        Text("Mở thẳng cài đặt Tắt Khóa Màn Hình Hệ Thống")
                     }
 
                     OutlinedButton(
                         onClick = onRefreshCheck,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("2. Re-check KeyguardManager Status")
-                    }
-
-                    Button(
-                        onClick = onChooseCoexist,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Keep Android System Lock (Disable Single-Lock Mode)")
-                    }
-                } else {
-                    Button(
-                        onClick = onChooseStandalone,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Continue in Independent Single-PIN Mode")
+                        Text("Kiểm tra lại trạng thái Khóa màn hình")
                     }
                 }
+            }
+        }
+
+        // Card 2: Cấp các quyền hệ thống trực tiếp
+        Card(
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Cấp quyền hoạt động nền bắt buộc",
+                    style = MaterialTheme.typography.titleLarge,
+                )
+
+                OutlinedButton(
+                    onClick = onRequestNotificationPermission,
+                    enabled = !notificationGranted,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (notificationGranted) "1. Quyền Thông báo dịch vụ nền: Đã cấp ✓"
+                        else "1. Bấm để cấp quyền Thông báo dịch vụ nền"
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onRequestIgnoreBatteryOptimization,
+                    enabled = !snapshot.isIgnoringBatteryOptimizations,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (snapshot.isIgnoringBatteryOptimizations) "2. Chạy nền không giới hạn Pin: Đã cấp ✓"
+                        else "2. Bấm để cho phép Chạy nền không giới hạn Pin"
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onOpenAccessibilitySettings,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (snapshot.isAccessibilityMonitorEnabled) "3. Dịch vụ Trợ năng (Tự bật khóa): Đã bật ✓"
+                        else "3. Bấm để bật Trợ năng 'DigitalLock Bảo Vệ Màn Hình Khóa'"
+                    )
+                }
+
+                if (snapshot.isHyperOsOrMiui) {
+                    OutlinedButton(
+                        onClick = onOpenHyperOsPermissions,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("4. Mở quyền Tự khởi chạy & Hiển thị trên màn hình khóa (HyperOS)")
+                    }
+                }
+            }
+        }
+
+        // Nút chuyển sang bước 2
+        if (snapshot.isAndroidDeviceSecure) {
+            Button(
+                onClick = onChooseCoexist,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Giữ khóa hệ thống & Tiếp tục sang Bước 2")
+            }
+        } else {
+            Button(
+                onClick = onChooseStandalone,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Tiếp tục với chế độ Khóa DigitalLock độc lập (Bước 2)")
             }
         }
     }
@@ -266,11 +444,11 @@ private fun Step2CreatePrimaryPin(
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
-            text = "Create Primary PIN",
+            text = "Tạo mã PIN chính",
             style = MaterialTheme.typography.headlineLarge,
         )
         Text(
-            text = "Choose a 4 to 12 character passcode. Stored exclusively as a 210,000-iteration PBKDF2-HMAC-SHA256 hash encrypted inside Android Keystore.",
+            text = "Thiết lập mã PIN từ 4 đến 12 chữ số. Dữ liệu được băm PBKDF2-HMAC-SHA256 (210.000 vòng) và mã hóa bằng Android Keystore.",
             style = MaterialTheme.typography.bodyLarge,
         )
 
@@ -287,7 +465,7 @@ private fun Step2CreatePrimaryPin(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Allow Alphanumeric Passcode", fontWeight = FontWeight.Medium)
+                    Text("Cho phép mật khẩu cả chữ và số", fontWeight = FontWeight.Medium)
                     Switch(
                         checked = allowAlphanumeric,
                         onCheckedChange = {
@@ -301,7 +479,7 @@ private fun Step2CreatePrimaryPin(
                 OutlinedTextField(
                     value = pin,
                     onValueChange = { if (it.length <= 12) pin = it },
-                    label = { Text("Primary PIN (4–12 chars)") },
+                    label = { Text("Mã PIN chính (4–12 ký tự)") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = if (allowAlphanumeric) KeyboardType.Password else KeyboardType.NumberPassword,
@@ -312,7 +490,7 @@ private fun Step2CreatePrimaryPin(
                 OutlinedTextField(
                     value = confirmPin,
                     onValueChange = { if (it.length <= 12) confirmPin = it },
-                    label = { Text("Confirm Primary PIN") },
+                    label = { Text("Nhập lại mã PIN chính") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = if (allowAlphanumeric) KeyboardType.Password else KeyboardType.NumberPassword,
@@ -337,7 +515,7 @@ private fun Step2CreatePrimaryPin(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Verify & Save Primary PIN")
+                    Text("Lưu mã PIN chính & Tiếp tục")
                 }
             }
         }
@@ -357,7 +535,6 @@ private fun Step3RecoveryConfiguration(
     var secondaryConfirm by remember { mutableStateOf("") }
     var secondaryPinSaved by remember { mutableStateOf(false) }
 
-    // Generate the one-time recovery code once on entering Step 3
     val oneTimeRecoveryCode = remember {
         recoveryManager.generateAndStoreOneTimeRecoveryCode()
     }
@@ -374,11 +551,10 @@ private fun Step3RecoveryConfiguration(
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
-            text = "Configure Recovery & Biometrics",
+            text = "Thiết lập Khôi phục & Sinh trắc học",
             style = MaterialTheme.typography.headlineLarge,
         )
 
-        // 1. One-Time Recovery Code Card
         ElevatedCard(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -388,7 +564,7 @@ private fun Step3RecoveryConfiguration(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "One-Time Recovery Code (Displayed Only Once)",
+                    text = "Mã khôi phục 1 lần (Chỉ hiển thị duy nhất lúc này)",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
@@ -397,7 +573,7 @@ private fun Step3RecoveryConfiguration(
                     color = MaterialTheme.colorScheme.primary,
                 )
                 Text(
-                    text = "Save this code in a safe place now. Only its salted PBKDF2-HMAC-SHA256 hash is stored on the device.",
+                    text = "Hãy sao chép và lưu lại mã này. Hệ thống chỉ lưu bản băm đã mã hóa, không lưu bản rõ.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 OutlinedButton(
@@ -408,12 +584,11 @@ private fun Step3RecoveryConfiguration(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (recoveryCodeCopied) "Recovery Code Copied" else "Copy Recovery Code")
+                    Text(if (recoveryCodeCopied) "Đã sao chép Mã khôi phục ✓" else "Sao chép Mã khôi phục")
                 }
             }
         }
 
-        // 2. Independent Secondary PIN Card
         Card(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -423,13 +598,13 @@ private fun Step3RecoveryConfiguration(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "Secondary Fallback PIN (Must Differ from Primary PIN)",
+                    text = "Mã PIN phụ độc lập (Khác với mã PIN chính)",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 OutlinedTextField(
                     value = secondaryPin,
                     onValueChange = { if (it.length <= 12) secondaryPin = it },
-                    label = { Text("Secondary PIN (4–12 digits)") },
+                    label = { Text("Mã PIN phụ (4–12 chữ số)") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     modifier = Modifier.fillMaxWidth(),
@@ -437,7 +612,7 @@ private fun Step3RecoveryConfiguration(
                 OutlinedTextField(
                     value = secondaryConfirm,
                     onValueChange = { if (it.length <= 12) secondaryConfirm = it },
-                    label = { Text("Confirm Secondary PIN") },
+                    label = { Text("Xác nhận mã PIN phụ") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     modifier = Modifier.fillMaxWidth(),
@@ -447,7 +622,7 @@ private fun Step3RecoveryConfiguration(
                         when (val res = pinManager.setupSecondaryPin(secondaryPin, secondaryConfirm)) {
                             is PinManager.PinSetupResult.Success -> {
                                 secondaryPinSaved = true
-                                feedbackMessage = "Secondary PIN saved independently."
+                                feedbackMessage = "Đã lưu mã PIN phụ thành công."
                             }
                             is PinManager.PinSetupResult.ValidationError -> {
                                 feedbackMessage = res.message
@@ -456,12 +631,11 @@ private fun Step3RecoveryConfiguration(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (secondaryPinSaved) "Secondary PIN Configured ✓" else "Save Secondary PIN")
+                    Text(if (secondaryPinSaved) "Đã lưu mã PIN phụ ✓" else "Lưu mã PIN phụ")
                 }
             }
         }
 
-        // 3. Security Question Card (with lower-security warning)
         Card(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -471,7 +645,7 @@ private fun Step3RecoveryConfiguration(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "Security Question (Optional)",
+                    text = "Câu hỏi bảo mật (Tùy chọn)",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
@@ -482,32 +656,31 @@ private fun Step3RecoveryConfiguration(
                 OutlinedTextField(
                     value = securityQuestion,
                     onValueChange = { securityQuestion = it },
-                    label = { Text("Custom Security Question") },
+                    label = { Text("Nhập câu hỏi bảo mật của bạn") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = securityAnswer,
                     onValueChange = { securityAnswer = it },
-                    label = { Text("Answer (Normalized & Hashed with Salt)") },
+                    label = { Text("Nhập câu trả lời") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedButton(
                     onClick = {
                         if (recoveryManager.setupSecurityQuestion(securityQuestion, securityAnswer)) {
                             securityQuestionSaved = true
-                            feedbackMessage = "Security Question normalized and hashed."
+                            feedbackMessage = "Đã chuẩn hóa và lưu câu hỏi bảo mật."
                         } else {
-                            feedbackMessage = "Question (min 4 chars) and Answer (min 2 chars) required."
+                            feedbackMessage = "Câu hỏi (tối thiểu 4 ký tự) và câu trả lời (tối thiểu 2 ký tự) không hợp lệ."
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (securityQuestionSaved) "Security Question Saved ✓" else "Save Security Question")
+                    Text(if (securityQuestionSaved) "Đã lưu câu hỏi bảo mật ✓" else "Lưu câu hỏi bảo mật")
                 }
             }
         }
 
-        // 4. Biometric Authentication Card
         Card(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -520,12 +693,12 @@ private fun Step3RecoveryConfiguration(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Biometric Unlock (Class 3 Strong)", fontWeight = FontWeight.SemiBold)
+                    Text("Mở khóa bằng Vân tay / Sinh trắc học", fontWeight = FontWeight.SemiBold)
                     Text(
                         text = if (biometricSupported) {
-                            "Uses Android BiometricPrompt hardware verification."
+                            "Sử dụng xác thực phần cứng BiometricPrompt của Android."
                         } else {
-                            "No Class 3 biometric sensor/enrollment detected on this device."
+                            "Thiết bị chưa đăng ký vân tay hoặc sinh trắc học mạnh."
                         },
                     )
                 }
@@ -548,7 +721,7 @@ private fun Step3RecoveryConfiguration(
             enabled = secondaryPinSaved || recoveryCodeCopied,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Complete Setup & Activate DigitalLock")
+            Text("Hoàn tất thiết lập & Bật DigitalLock")
         }
     }
 }
