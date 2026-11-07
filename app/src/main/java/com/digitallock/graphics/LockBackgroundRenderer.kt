@@ -16,8 +16,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,35 +30,63 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import component.liquid.LayerBackdrop
 import component.liquid.layerBackdrop
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
-/**
- * Identifies the active background texture source for the Liquid Glass PIN screen.
- *
- * Per Android 14+ platform restrictions, `WallpaperManager.getDrawable()` is NEVER used
- * as a guaranteed lockscreen wallpaper provider because it throws `SecurityException` without
- * privileged storage permissions and does not expose live lockscreen layers.
- */
 enum class BackgroundTextureSource {
     USER_SELECTED_URI,
     MEDIA_PROJECTION_FRAME,
     PROCEDURAL_LIQUID_DEPTH,
 }
 
-data class LockBackgroundState(
-    val activeSource: BackgroundTextureSource = BackgroundTextureSource.PROCEDURAL_LIQUID_DEPTH,
-    val customBitmap: Bitmap? = null,
-    val statusNote: String = "Using procedural high-depth Liquid Glass background.",
-)
+object BackdropCaptureStore {
+    private const val CAPTURED_FILE_NAME = "captured_lock_backdrop.png"
 
-/**
- * Renders the single shared background source into [sharedBackdrop] via `Modifier.layerBackdrop`.
- * All 12 PIN buttons and status capsules refract this single backdrop texture without creating
- * redundant background captures.
- */
+    private val _capturedBitmapFlow = MutableStateFlow<Bitmap?>(null)
+    val capturedBitmapFlow: StateFlow<Bitmap?> = _capturedBitmapFlow.asStateFlow()
+
+    private val _isMediaProjectionActive = MutableStateFlow(false)
+    val isMediaProjectionActive: StateFlow<Boolean> = _isMediaProjectionActive.asStateFlow()
+
+    fun setMediaProjectionActive(active: Boolean) {
+        _isMediaProjectionActive.value = active
+    }
+
+    fun updateCapturedBitmap(context: Context, bitmap: Bitmap) {
+        _capturedBitmapFlow.value = bitmap
+        try {
+            val file = File(context.applicationContext.filesDir, CAPTURED_FILE_NAME)
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 92, out)
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    fun loadPersistedBitmapIfNeeded(context: Context): Bitmap? {
+        _capturedBitmapFlow.value?.let { return it }
+        return try {
+            val file = File(context.applicationContext.filesDir, CAPTURED_FILE_NAME)
+            if (file.exists()) {
+                BitmapFactory.decodeFile(file.absolutePath)?.also {
+                    _capturedBitmapFlow.value = it
+                }
+            } else {
+                null
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+}
+
 object LockBackgroundRenderer {
 
     @Composable
@@ -66,16 +94,23 @@ object LockBackgroundRenderer {
         sharedBackdrop: LayerBackdrop,
         customWallpaperUri: String?,
         mediaProjectionBitmap: Bitmap?,
-        ambientPhase: Float,
         modifier: Modifier = Modifier,
         content: @Composable (BackgroundTextureSource) -> Unit,
     ) {
         val context = LocalContext.current
         var userBitmap by remember { mutableStateOf<Bitmap?>(null) }
+        val storedProjectionBitmap by BackdropCaptureStore.capturedBitmapFlow.collectAsState()
+
+        LaunchedEffect(Unit) {
+            if (storedProjectionBitmap == null) {
+                withContext(Dispatchers.IO) {
+                    BackdropCaptureStore.loadPersistedBitmapIfNeeded(context)
+                }
+            }
+        }
 
         LaunchedEffect(customWallpaperUri) {
             if (customWallpaperUri.isNullOrBlank()) {
-                userBitmap?.recycle()
                 userBitmap = null
             } else {
                 userBitmap = withContext(Dispatchers.IO) {
@@ -84,26 +119,32 @@ object LockBackgroundRenderer {
             }
         }
 
-        DisposableEffect(Unit) {
-            onDispose {
-                userBitmap = null
-            }
-        }
+        val effectiveProjectionBitmap = mediaProjectionBitmap ?: storedProjectionBitmap
 
         val activeSource = when {
+            effectiveProjectionBitmap != null -> BackgroundTextureSource.MEDIA_PROJECTION_FRAME
             userBitmap != null -> BackgroundTextureSource.USER_SELECTED_URI
-            mediaProjectionBitmap != null -> BackgroundTextureSource.MEDIA_PROJECTION_FRAME
             else -> BackgroundTextureSource.PROCEDURAL_LIQUID_DEPTH
         }
 
         Box(modifier = modifier.fillMaxSize()) {
-            // Single shared capture pass recorded into `sharedBackdrop`
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .layerBackdrop(sharedBackdrop),
             ) {
                 when (activeSource) {
+                    BackgroundTextureSource.MEDIA_PROJECTION_FRAME -> {
+                        effectiveProjectionBitmap?.let { bmp ->
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
+
                     BackgroundTextureSource.USER_SELECTED_URI -> {
                         userBitmap?.let { bmp ->
                             Image(
@@ -115,62 +156,45 @@ object LockBackgroundRenderer {
                         }
                     }
 
-                    BackgroundTextureSource.MEDIA_PROJECTION_FRAME -> {
-                        mediaProjectionBitmap?.let { bmp ->
-                            Image(
-                                bitmap = bmp.asImageBitmap(),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
-                    }
-
                     BackgroundTextureSource.PROCEDURAL_LIQUID_DEPTH -> {
-                        ProceduralLiquidDepthCanvas(ambientPhase = ambientPhase)
+                        ProceduralLiquidDepthCanvas()
                     }
                 }
             }
 
-            // Foreground PIN UI layer that samples and refracts `sharedBackdrop`
             content(activeSource)
         }
     }
 
-    /**
-     * Renders the deep indigo/cobalt/emerald curved wave background inspired by the reference
-     * iOS 27 Liquid Glass lockscreen (`96325.jpg`). High-contrast curved geometric ridges
-     * sit directly behind the 3x4 PIN grid so every circular lens visibly bends the boundary curves.
-     */
     @Composable
-    private fun ProceduralLiquidDepthCanvas(ambientPhase: Float) {
+    private fun ProceduralLiquidDepthCanvas() {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
-            val shiftX = (ambientPhase - 0.5f) * w * 0.03f
-            val shiftY = (ambientPhase - 0.5f) * h * 0.02f
 
-            // Base midnight abyss gradient
             drawRect(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF020714),
-                        Color(0xFF040E27),
-                        Color(0xFF071638),
+                        Color(0xFF010613),
+                        Color(0xFF030D24),
+                        Color(0xFF061534),
                     ),
                 ),
             )
 
-            // Upper-right cobalt/sapphire sculpted wave lobe
+            // Upper-right cobalt/sapphire lobe matching 96372.jpg
             val upperWave = Path().apply {
-                moveTo(w * 0.36f + shiftX, 0f)
+                moveTo(w * 0.36f, 0f)
                 cubicTo(
-                    w * 0.24f - shiftX, h * 0.22f,
-                    w * 0.34f + shiftX, h * 0.52f,
-                    w * 0.92f, h * 0.68f + shiftY,
+                    w * 0.25f, h * 0.22f,
+                    w * 0.35f, h * 0.50f,
+                    w * 0.88f, h * 0.66f,
                 )
-                lineTo(w, h * 0.85f)
-                lineTo(w, 0f)
+                cubicTo(
+                    w * 0.96f, h * 0.36f,
+                    w * 0.94f, h * 0.12f,
+                    w * 0.82f, 0f,
+                )
                 close()
             }
             drawPath(
@@ -178,48 +202,22 @@ object LockBackgroundRenderer {
                 brush = Brush.linearGradient(
                     colors = listOf(
                         Color(0xFF0B1C48),
-                        Color(0xFF284893),
-                        Color(0xFF4F74C8),
-                        Color(0xFF172C69),
+                        Color(0xFF2B4D9B),
+                        Color(0xFF567DD4),
+                        Color(0xFF152964),
                     ),
-                    start = Offset(w * 0.30f, h * 0.10f),
-                    end = Offset(w * 0.95f, h * 0.65f),
+                    start = Offset(w * 0.32f, h * 0.08f),
+                    end = Offset(w * 0.92f, h * 0.62f),
                 ),
             )
 
-            // Luminous specular crest along the cobalt wave boundary
-            val cobaltRim = Path().apply {
-                moveTo(w * 0.36f + shiftX, 0f)
-                cubicTo(
-                    w * 0.24f - shiftX, h * 0.22f,
-                    w * 0.34f + shiftX, h * 0.52f,
-                    w * 0.92f, h * 0.68f + shiftY,
-                )
-                cubicTo(
-                    w * 0.38f + shiftX, h * 0.50f,
-                    w * 0.28f - shiftX, h * 0.22f,
-                    w * 0.40f + shiftX, 0f,
-                )
-                close()
-            }
-            drawPath(
-                path = cobaltRim,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF6B92E8).copy(alpha = 0.55f),
-                        Color(0xFFA5C4FF).copy(alpha = 0.85f),
-                        Color(0xFF3A5FB0).copy(alpha = 0.35f),
-                    ),
-                ),
-            )
-
-            // Lower-left deep emerald/teal diagonal wave intersecting the PIN keypad
+            // Lower-left emerald/teal lobe intersecting the PIN grid matching 96372.jpg
             val emeraldWave = Path().apply {
-                moveTo(0f, h * 0.34f + shiftY)
+                moveTo(0f, h * 0.33f)
                 cubicTo(
-                    w * 0.46f + shiftX, h * 0.38f - shiftY,
-                    w * 0.78f - shiftX, h * 0.64f + shiftY,
-                    w * 0.62f, h * 0.86f,
+                    w * 0.45f, h * 0.39f,
+                    w * 0.78f, h * 0.63f,
+                    w * 0.63f, h * 0.85f,
                 )
                 cubicTo(
                     w * 0.42f, h * 0.94f,
@@ -232,51 +230,23 @@ object LockBackgroundRenderer {
                 path = emeraldWave,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color(0xFF042D2E),
-                        Color(0xFF0E6358),
-                        Color(0xFF289E82),
-                        Color(0xFF042229),
+                        Color(0xFF03282A),
+                        Color(0xFF0F685C),
+                        Color(0xFF2EA98B),
+                        Color(0xFF031F25),
                     ),
-                    start = Offset(0f, h * 0.36f),
-                    end = Offset(w * 0.72f, h * 0.82f),
+                    start = Offset(0f, h * 0.35f),
+                    end = Offset(w * 0.70f, h * 0.80f),
                 ),
             )
 
-            // Bright seafoam-cyan ridge across buttons 1, 4, 5, 8 so lens refraction is unmistakably visible
-            val emeraldCrest = Path().apply {
-                moveTo(0f, h * 0.34f + shiftY)
-                cubicTo(
-                    w * 0.46f + shiftX, h * 0.38f - shiftY,
-                    w * 0.78f - shiftX, h * 0.64f + shiftY,
-                    w * 0.62f, h * 0.86f,
-                )
-                cubicTo(
-                    w * 0.74f - shiftX, h * 0.63f + shiftY,
-                    w * 0.43f + shiftX, h * 0.41f - shiftY,
-                    0f, h * 0.37f + shiftY,
-                )
-                close()
-            }
-            drawPath(
-                path = emeraldCrest,
-                brush = Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFF4ADBC2).copy(alpha = 0.75f),
-                        Color(0xFF98FFE8).copy(alpha = 0.92f),
-                        Color(0xFF1E7E6C).copy(alpha = 0.35f),
-                    ),
-                    start = Offset(w * 0.05f, h * 0.35f),
-                    end = Offset(w * 0.68f, h * 0.78f),
-                ),
-            )
-
-            // Bottom sweeping indigo-slate base wave
+            // Bottom sweeping blue-violet lobe matching 96372.jpg
             val bottomSweep = Path().apply {
-                moveTo(0f, h * 0.93f)
+                moveTo(0f, h * 0.94f)
                 cubicTo(
-                    w * 0.35f, h * 0.78f,
-                    w * 0.72f, h * 0.65f,
-                    w, h * 0.56f,
+                    w * 0.38f, h * 0.80f,
+                    w * 0.74f, h * 0.66f,
+                    w, h * 0.55f,
                 )
                 lineTo(w, h)
                 lineTo(0f, h)
@@ -286,27 +256,23 @@ object LockBackgroundRenderer {
                 path = bottomSweep,
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF1E3770).copy(alpha = 0.88f),
-                        Color(0xFF39528A),
-                        Color(0xFF536B9E),
+                        Color(0xFF1D3670),
+                        Color(0xFF3B5691),
+                        Color(0xFF5A73A8),
                     ),
-                    startY = h * 0.56f,
+                    startY = h * 0.55f,
                     endY = h,
                 ),
             )
         }
     }
 
-    /**
-     * Captures a single consenting screen texture frame from an active [MediaProjection] session
-     * and immediately releases the [VirtualDisplay] and [ImageReader] so no continuous background
-     * recording occurs. Respects Android 14+ single-use token lifecycle via `MediaProjection.Callback`.
-     */
     fun captureSingleFrameFromMediaProjection(
         mediaProjection: MediaProjection,
         width: Int,
         height: Int,
         densityDpi: Int,
+        stopProjectionAfterCapture: Boolean = false,
         onFrameCaptured: (Bitmap?) -> Unit,
     ) {
         val mainHandler = Handler(Looper.getMainLooper())
@@ -367,11 +333,15 @@ object LockBackgroundRenderer {
                     virtualDisplay = null
                     reader.close()
                     mediaProjection.unregisterCallback(projectionCallback)
-                    mediaProjection.stop()
+                    if (stopProjectionAfterCapture) {
+                        try {
+                            mediaProjection.stop()
+                        } catch (_: Throwable) {
+                        }
+                    }
                 }
             }, mainHandler)
-        } catch (_: SecurityException) {
-            // Android 14+ throws SecurityException if a token is reused; fall back cleanly.
+        } catch (_: Throwable) {
             virtualDisplay?.release()
             imageReader.close()
             mediaProjection.unregisterCallback(projectionCallback)
