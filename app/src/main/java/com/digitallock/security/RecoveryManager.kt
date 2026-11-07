@@ -4,24 +4,10 @@ import java.security.SecureRandom
 import java.text.Normalizer
 import java.util.Locale
 
-/**
- * Manages Recovery Code generation/verification and Security Question normalization/verification.
- *
- * Rules enforced:
- * - Recovery Code is generated once using CSPRNG (`XXXX-XXXX-XXXX-XXXX`), returned for one-time
- *   display/copy during setup, and immediately hashed with its own salt + Keystore AES-GCM encryption.
- * - Security Question answer is normalized (NFKC, trimmed, lowercased, collapsed whitespace) before
- *   PBKDF2-HMAC-SHA256 hashing with its own salt.
- */
 class RecoveryManager(private val credentialStore: CredentialStore) {
 
     private val secureRandom = SecureRandom()
 
-    /**
-     * Generates a new 16-character high-entropy recovery code formatted as `XXXX-XXXX-XXXX-XXXX`,
-     * stores only its salted PBKDF2-HMAC-SHA256 hash in [credentialStore], and returns the raw string
-     * once so the UI can display it to the user during setup.
-     */
     fun generateAndStoreOneTimeRecoveryCode(): String {
         val rawChars = CharArray(16) {
             RECOVERY_ALPHABET[secureRandom.nextInt(RECOVERY_ALPHABET.length)]
@@ -108,11 +94,10 @@ class RecoveryManager(private val credentialStore: CredentialStore) {
     }
 
     companion object {
-        // Unambiguous uppercase alphanumeric alphabet (excludes 0/O, 1/I/L)
         private const val RECOVERY_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
         const val SECURITY_QUESTION_ENTROPY_WARNING =
-            "Security Questions have lower cryptographic entropy than Recovery Codes and can be guessed by people who know your personal history. Use a high-entropy phrase."
+            "Cảnh báo: Câu hỏi bảo mật có độ an toàn thấp hơn Mã khôi phục và dễ bị đoán nếu người khác biết thông tin cá nhân của bạn."
 
         fun normalizeSecurityAnswer(rawAnswer: String): CharArray {
             val nfkc = Normalizer.normalize(rawAnswer, Normalizer.Form.NFKC)
