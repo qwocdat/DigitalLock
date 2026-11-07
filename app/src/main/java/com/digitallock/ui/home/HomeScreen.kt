@@ -1,6 +1,8 @@
 package com.digitallock.ui.home
 
+import android.app.Activity
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -34,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -42,13 +44,15 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.digitallock.data.LockOperationMode
 import com.digitallock.data.LockRepository
 import com.digitallock.data.SettingsRepository
+import com.digitallock.graphics.BackdropCaptureStore
 import com.digitallock.lock.LockActivity
 import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
 import com.digitallock.service.MonitorService
-import com.digitallock.ui.setup.openHyperOsAutostartAndPermissions
+import com.digitallock.ui.setup.openAutostartAndBackgroundPermissions
 import com.digitallock.ui.setup.openScreenLockSettingsDirectly
 import com.digitallock.ui.setup.requestIgnoreBatteryOptimizationsDirectly
+import com.digitallock.ui.setup.requestOverlayPermissionDirectly
 
 @Composable
 fun HomeScreen(
@@ -63,6 +67,7 @@ fun HomeScreen(
 
     val settings by settingsRepository.settingsFlow.collectAsState()
     val lastDiag by lockRepository.lastDiagnostic.collectAsState()
+    val isProjectionActive by BackdropCaptureStore.isMediaProjectionActive.collectAsState()
     var snapshot by remember { mutableStateOf(lockRepository.querySystemSecuritySnapshot()) }
 
     DisposableEffect(lifecycleOwner) {
@@ -90,16 +95,25 @@ fun HomeScreen(
         }
     }
 
+    val mediaProjectionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            MonitorService.initMediaProjectionSession(context, result.resultCode, result.data!!)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .systemBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
             text = "Trung tâm điều khiển DigitalLock",
-            style = MaterialTheme.typography.headlineLarge,
+            style = MaterialTheme.typography.headlineMedium,
         )
 
         ElevatedCard(
@@ -110,7 +124,7 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(
@@ -162,7 +176,7 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
@@ -170,28 +184,23 @@ fun HomeScreen(
                     style = MaterialTheme.typography.titleLarge,
                 )
                 val keyguardStatusText = if (snapshot.isAndroidDeviceSecure) {
-                    "Đang bật (Hãy tắt trong cài đặt Khóa màn hình để tránh nhập 2 lần PIN)"
+                    "Đang bật (Hãy tắt để tránh nhập 2 lần PIN)"
                 } else {
-                    "Đã tắt (Chuẩn chế độ 1 lớp khóa)"
+                    "Đã tắt ✓"
                 }
-                val accessibilityStatusText = if (snapshot.isAccessibilityMonitorEnabled) {
-                    "Đã bật ✓"
-                } else {
-                    "Chưa bật (Cần bật để tự mở màn hình khóa khi bật máy)"
-                }
-                val deviceOwnerStatusText = if (snapshot.isDeviceOwnerProvisioned) {
-                    "Đã kích hoạt Device Owner ✓"
-                } else {
-                    "Chế độ ứng dụng tiêu chuẩn"
-                }
-                val batteryStatusText = if (snapshot.isIgnoringBatteryOptimizations) "Đã cho phép ✓" else "Chưa cấp quyền"
+                val overlayStatusText = if (snapshot.canDrawOverlays) "Đã cấp ✓" else "Chưa cấp (Cần để tự mở khóa)"
+                val accessibilityStatusText = if (snapshot.isAccessibilityMonitorEnabled) "Đã bật ✓" else "Chưa bật"
+                val projectionStatusText = if (isProjectionActive) "Đang hoạt động ✓" else "Chưa cấp quyền"
+                val batteryStatusText = if (snapshot.isIgnoringBatteryOptimizations) "Đã cho phép ✓" else "Chưa cấp"
+
                 Text(
                     text = listOf(
                         "• Khóa màn hình hệ thống: $keyguardStatusText",
+                        "• Quyền Hiển thị trên ứng dụng khác: $overlayStatusText",
                         "• Dịch vụ Trợ năng DigitalLock: $accessibilityStatusText",
-                        "• Không giới hạn tối ưu hóa Pin: $batteryStatusText",
-                        "• Chế độ Quản trị (Device Owner): $deviceOwnerStatusText",
-                        "• Trạng thái gần nhất: ${lastDiag.status}",
+                        "• Quyền Chụp nền màn hình khóa: $projectionStatusText",
+                        "• Chạy nền không giới hạn Pin: $batteryStatusText",
+                        "• Trạng thái gần nhất: ${lastDiag.reasonMessage}",
                     ).joinToString(separator = "\n"),
                     style = MaterialTheme.typography.bodyLarge,
                 )
@@ -201,8 +210,18 @@ fun HomeScreen(
                         onClick = { openScreenLockSettingsDirectly(context) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Mở thẳng cài đặt Tắt Khóa Màn Hình Hệ Thống")
+                        Text("Mở cài đặt Tắt Khóa Màn Hình Hệ Thống")
                     }
+                }
+
+                OutlinedButton(
+                    onClick = { requestOverlayPermissionDirectly(context) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (snapshot.canDrawOverlays) "1. Hiển thị trên ứng dụng khác: Đã cấp ✓"
+                        else "1. Cấp quyền Hiển thị trên ứng dụng khác (Bắt buộc)"
+                    )
                 }
 
                 OutlinedButton(
@@ -212,8 +231,30 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        if (snapshot.isAccessibilityMonitorEnabled) "Cài đặt Trợ năng (Đã bật ✓)"
-                        else "Bật Dịch vụ Trợ năng DigitalLock"
+                        if (snapshot.isAccessibilityMonitorEnabled) "2. Dịch vụ Trợ năng: Đã bật ✓"
+                        else "2. Bật Dịch vụ Trợ năng DigitalLock"
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { openAutostartAndBackgroundPermissions(context) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("3. Cấp quyền Tự khởi chạy (Autostart) & Bật cửa sổ nền")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        val mpm = context.getSystemService(MediaProjectionManager::class.java)
+                        if (mpm != null) {
+                            mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (isProjectionActive) "4. Chụp nền màn hình khóa (Android): Đã bật ✓"
+                        else "4. Cấp quyền Chụp màn hình làm nền khóa (MediaProjection)"
                     )
                 }
 
@@ -222,16 +263,7 @@ fun HomeScreen(
                         onClick = { requestIgnoreBatteryOptimizationsDirectly(context) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Cho phép chạy nền không giới hạn Pin")
-                    }
-                }
-
-                if (snapshot.isHyperOsOrMiui) {
-                    OutlinedButton(
-                        onClick = { openHyperOsAutostartAndPermissions(context) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Mở quyền Tự khởi chạy & Hiển thị trên màn hình khóa (HyperOS)")
+                        Text("5. Cho phép chạy nền không giới hạn Pin")
                     }
                 }
             }
@@ -249,7 +281,7 @@ fun HomeScreen(
             }
 
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
@@ -257,10 +289,10 @@ fun HomeScreen(
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
-                    text = if (settings.customWallpaperUri != null) {
-                        "Nguồn nền: Ảnh tùy chỉnh từ thư viện của bạn"
-                    } else {
-                        "Nguồn nền: Nền sóng Liquid Glass chiều sâu mặc định"
+                    text = when {
+                        isProjectionActive -> "Nguồn nền: Đang dùng ảnh chụp màn hình khóa thực tế (MediaProjection)"
+                        settings.customWallpaperUri != null -> "Nguồn nền: Ảnh tùy chỉnh từ thư viện của bạn"
+                        else -> "Nguồn nền: Nền sóng Liquid Glass chuẩn iOS 27"
                     },
                 )
 
@@ -273,14 +305,14 @@ fun HomeScreen(
                         },
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Chọn ảnh nền khóa")
+                        Text("Chọn ảnh nền")
                     }
                     if (settings.customWallpaperUri != null) {
                         OutlinedButton(
                             onClick = { settingsRepository.setCustomWallpaperUri(null) },
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text("Về nền mặc định")
+                            Text("Xóa ảnh chọn")
                         }
                     }
                 }
@@ -312,7 +344,7 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
