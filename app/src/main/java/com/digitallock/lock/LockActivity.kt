@@ -22,7 +22,11 @@ import com.digitallock.security.CredentialStore
 import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
 import com.digitallock.ui.lock.LiquidGlassLockScreen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
+import com.digitallock.service.MonitorService
+import com.digitallock.graphics.BackdropCaptureStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -200,7 +204,8 @@ class LockActivity : FragmentActivity() {
             )
         }
         lifecycleScope.launch {
-            when (val outcome = authManager.authenticatePin(candidatePin)) {
+            val outcome = withContext(Dispatchers.Default) { authManager.authenticatePin(candidatePin) }
+            when (outcome) {
                 is AuthenticationManager.AuthOutcome.Authenticated -> {
                     completeUnlockTransition()
                 }
@@ -298,8 +303,9 @@ class LockActivity : FragmentActivity() {
                 statusPrompt = "Đã mở khóa",
             )
         }
-        delay(320L)
+        delay(140L)
         SessionManager.unlockSession()
+        MonitorService.requestBackdropCapture(applicationContext, 380L)
         if (isLockTaskActive) {
             try {
                 stopLockTask()
