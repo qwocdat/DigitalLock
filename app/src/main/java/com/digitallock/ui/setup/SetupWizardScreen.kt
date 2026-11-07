@@ -1,6 +1,7 @@
 package com.digitallock.ui.setup
 
 import android.Manifest
+import android.app.Activity
 import android.app.admin.DevicePolicyManager
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -8,6 +9,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -41,6 +44,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,9 +64,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.digitallock.data.LockOperationMode
 import com.digitallock.data.LockRepository
 import com.digitallock.data.SettingsRepository
+import com.digitallock.graphics.BackdropCaptureStore
 import com.digitallock.security.AuthenticationManager
 import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
+import com.digitallock.service.MonitorService
 import com.digitallock.ui.components.expressiveSpring
 
 fun openScreenLockSettingsDirectly(context: Context) {
@@ -78,6 +84,19 @@ fun openScreenLockSettingsDirectly(context: Context) {
             return
         } catch (_: Throwable) {
         }
+    }
+}
+
+fun requestOverlayPermissionDirectly(context: Context) {
+    try {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}"),
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (_: Throwable) {
     }
 }
 
@@ -102,8 +121,16 @@ fun requestIgnoreBatteryOptimizationsDirectly(context: Context) {
     }
 }
 
-fun openHyperOsAutostartAndPermissions(context: Context) {
-    val miuiIntents = listOf(
+fun openAutostartAndBackgroundPermissions(context: Context) {
+    val candidateIntents = listOf(
+        // Xiaomi HyperOS / MIUI Autostart Management
+        Intent().apply {
+            component = ComponentName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            )
+        },
+        // Xiaomi HyperOS / MIUI App Permission Editor (Popup in background / Lockscreen display)
         Intent("miui.intent.action.APP_PERM_EDITOR").apply {
             setClassName(
                 "com.miui.securitycenter",
@@ -114,18 +141,27 @@ fun openHyperOsAutostartAndPermissions(context: Context) {
         Intent("miui.intent.action.APP_PERM_EDITOR").apply {
             putExtra("extra_pkgname", context.packageName)
         },
+        // OPPO / ColorOS / Realme Startup Manager
         Intent().apply {
             component = ComponentName(
-                "com.miui.securitycenter",
-                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+                "com.coloros.safecenter",
+                "com.coloros.safecenter.permission.startup.StartupAppListActivity",
             )
         },
+        // Vivo Startup Manager
+        Intent().apply {
+            component = ComponentName(
+                "com.vivo.permissionmanager",
+                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+            )
+        },
+        // Fallback: App Info details page
         Intent(
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
             Uri.parse("package:${context.packageName}"),
         ),
     )
-    for (intent in miuiIntents) {
+    for (intent in candidateIntents) {
         try {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
@@ -149,6 +185,8 @@ fun SetupWizardScreen(
 
     var currentStep by remember { mutableIntStateOf(1) }
     var snapshot by remember { mutableStateOf(lockRepository.querySystemSecuritySnapshot()) }
+    val isProjectionActive by BackdropCaptureStore.isMediaProjectionActive.collectAsState()
+
     var notificationGranted by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -166,6 +204,14 @@ fun SetupWizardScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         notificationGranted = granted
+    }
+
+    val mediaProjectionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            MonitorService.initMediaProjectionSession(context, result.resultCode, result.data!!)
+        }
     }
 
     var selectedMode by remember {
@@ -201,9 +247,10 @@ fun SetupWizardScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .systemBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text(
             text = "Thiết lập DigitalLock • Bước $currentStep / 3",
@@ -223,6 +270,7 @@ fun SetupWizardScreen(
                 1 -> Step1KeyguardAndPermissionsCheck(
                     snapshot = snapshot,
                     notificationGranted = notificationGranted,
+                    isProjectionActive = isProjectionActive,
                     onRefreshCheck = {
                         val updated = lockRepository.querySystemSecuritySnapshot()
                         snapshot = updated
@@ -230,17 +278,8 @@ fun SetupWizardScreen(
                             selectedMode = LockOperationMode.STANDALONE_SINGLE_LOCK
                         }
                     },
-                    onOpenScreenLockSettings = {
-                        openScreenLockSettingsDirectly(context)
-                    },
-                    onRequestNotificationPermission = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                    },
-                    onRequestIgnoreBatteryOptimization = {
-                        requestIgnoreBatteryOptimizationsDirectly(context)
-                    },
+                    onOpenScreenLockSettings = { openScreenLockSettingsDirectly(context) },
+                    onRequestOverlayPermission = { requestOverlayPermissionDirectly(context) },
                     onOpenAccessibilitySettings = {
                         try {
                             context.startActivity(
@@ -251,8 +290,20 @@ fun SetupWizardScreen(
                         } catch (_: Throwable) {
                         }
                     },
-                    onOpenHyperOsPermissions = {
-                        openHyperOsAutostartAndPermissions(context)
+                    onOpenAutostartSettings = { openAutostartAndBackgroundPermissions(context) },
+                    onRequestMediaProjection = {
+                        val mpm = context.getSystemService(MediaProjectionManager::class.java)
+                        if (mpm != null) {
+                            mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+                        }
+                    },
+                    onRequestIgnoreBatteryOptimization = {
+                        requestIgnoreBatteryOptimizationsDirectly(context)
+                    },
+                    onRequestNotificationPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
                     },
                     onChooseStandalone = {
                         selectedMode = LockOperationMode.STANDALONE_SINGLE_LOCK
@@ -288,22 +339,24 @@ fun SetupWizardScreen(
 private fun Step1KeyguardAndPermissionsCheck(
     snapshot: LockRepository.SystemSecuritySnapshot,
     notificationGranted: Boolean,
+    isProjectionActive: Boolean,
     onRefreshCheck: () -> Unit,
     onOpenScreenLockSettings: () -> Unit,
-    onRequestNotificationPermission: () -> Unit,
-    onRequestIgnoreBatteryOptimization: () -> Unit,
+    onRequestOverlayPermission: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
-    onOpenHyperOsPermissions: () -> Unit,
+    onOpenAutostartSettings: () -> Unit,
+    onRequestMediaProjection: () -> Unit,
+    onRequestIgnoreBatteryOptimization: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
     onChooseStandalone: () -> Unit,
     onChooseCoexist: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
-            text = "Kiểm tra Khóa hệ thống & Cấp quyền",
-            style = MaterialTheme.typography.headlineLarge,
+            text = "Tắt Khóa Hệ Thống & Cấp Quyền Tự Khởi Chạy",
+            style = MaterialTheme.typography.headlineMedium,
         )
 
-        // Card 1: Kiểm tra khóa màn hình hệ thống (Mở thẳng cài đặt Mật khẩu / Khóa màn hình, không mở Play Protect)
         ElevatedCard(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.elevatedCardColors(
@@ -312,14 +365,14 @@ private fun Step1KeyguardAndPermissionsCheck(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
                     text = if (snapshot.isAndroidDeviceSecure) {
-                        "Khóa màn hình hệ thống Android đang BẬT"
+                        "Khóa màn hình hệ thống đang BẬT"
                     } else {
-                        "Khóa màn hình hệ thống đã TẮT (Sẵn sàng chế độ 1 lớp khóa)"
+                        "Khóa màn hình hệ thống đã TẮT ✓"
                     },
                     style = MaterialTheme.typography.titleLarge,
                     color = if (snapshot.isAndroidDeviceSecure) {
@@ -331,9 +384,9 @@ private fun Step1KeyguardAndPermissionsCheck(
 
                 Text(
                     text = if (snapshot.isAndroidDeviceSecure) {
-                        "Thiết bị đang bật khóa màn hình của hệ thống (PIN, Mật khẩu hoặc Hình vẽ). Để không phải nhập 2 lần mật khẩu liên tiếp, hãy nhấn nút bên dưới để mở thẳng phần Chọn khóa màn hình và chuyển về 'Không' (None) hoặc 'Vuốt' (Swipe)."
+                        "Hãy bấm nút bên dưới để mở thẳng cài đặt Mật khẩu / Khóa màn hình và tắt khóa hệ thống (chọn Không hoặc Vuốt) để chỉ dùng 1 lớp khóa của DigitalLock."
                     } else {
-                        "Đã xác nhận tắt khóa màn hình hệ thống! Bạn sẽ chỉ cần nhập duy nhất 1 lớp mã PIN Liquid Glass của DigitalLock."
+                        "Bạn đã tắt khóa màn hình hệ thống! DigitalLock sẽ hoạt động làm lớp khóa PIN duy nhất."
                     },
                     style = MaterialTheme.typography.bodyLarge,
                 )
@@ -343,7 +396,7 @@ private fun Step1KeyguardAndPermissionsCheck(
                         onClick = onOpenScreenLockSettings,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Mở thẳng cài đặt Tắt Khóa Màn Hình Hệ Thống")
+                        Text("Mở cài đặt Tắt Khóa Màn Hình Hệ Thống")
                     }
 
                     OutlinedButton(
@@ -356,28 +409,53 @@ private fun Step1KeyguardAndPermissionsCheck(
             }
         }
 
-        // Card 2: Cấp các quyền hệ thống trực tiếp
         Card(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "Cấp quyền hoạt động nền bắt buộc",
+                    text = "Cấp quyền Tự bật khóa & Chụp nền màn hình",
                     style = MaterialTheme.typography.titleLarge,
                 )
 
                 OutlinedButton(
-                    onClick = onRequestNotificationPermission,
-                    enabled = !notificationGranted,
+                    onClick = onRequestOverlayPermission,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        if (notificationGranted) "1. Quyền Thông báo dịch vụ nền: Đã cấp ✓"
-                        else "1. Bấm để cấp quyền Thông báo dịch vụ nền"
+                        if (snapshot.canDrawOverlays) "1. Hiển thị trên ứng dụng khác (Tự bật khóa): Đã cấp ✓"
+                        else "1. Bấm cấp quyền Hiển thị trên ứng dụng khác (Bắt buộc)"
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onOpenAccessibilitySettings,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (snapshot.isAccessibilityMonitorEnabled) "2. Dịch vụ Trợ năng DigitalLock: Đã bật ✓"
+                        else "2. Bấm bật Dịch vụ Trợ năng 'DigitalLock Bảo Vệ Màn Hình Khóa'"
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onOpenAutostartSettings,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("3. Bấm cấp quyền Tự khởi chạy (Autostart) & Bật cửa sổ nền")
+                }
+
+                OutlinedButton(
+                    onClick = onRequestMediaProjection,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (isProjectionActive) "4. Quyền Chụp nền màn hình khóa (Android): Đã cấp ✓"
+                        else "4. Bấm cấp quyền Chụp màn hình làm nền khóa (MediaProjection)"
                     )
                 }
 
@@ -387,46 +465,35 @@ private fun Step1KeyguardAndPermissionsCheck(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        if (snapshot.isIgnoringBatteryOptimizations) "2. Chạy nền không giới hạn Pin: Đã cấp ✓"
-                        else "2. Bấm để cho phép Chạy nền không giới hạn Pin"
+                        if (snapshot.isIgnoringBatteryOptimizations) "5. Chạy nền không giới hạn Pin: Đã cấp ✓"
+                        else "5. Bấm cho phép Chạy nền không giới hạn Pin"
                     )
                 }
 
-                OutlinedButton(
-                    onClick = onOpenAccessibilitySettings,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        if (snapshot.isAccessibilityMonitorEnabled) "3. Dịch vụ Trợ năng (Tự bật khóa): Đã bật ✓"
-                        else "3. Bấm để bật Trợ năng 'DigitalLock Bảo Vệ Màn Hình Khóa'"
-                    )
-                }
-
-                if (snapshot.isHyperOsOrMiui) {
+                if (!notificationGranted) {
                     OutlinedButton(
-                        onClick = onOpenHyperOsPermissions,
+                        onClick = onRequestNotificationPermission,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("4. Mở quyền Tự khởi chạy & Hiển thị trên màn hình khóa (HyperOS)")
+                        Text("6. Bấm cấp quyền Thông báo dịch vụ nền")
                     }
                 }
             }
         }
 
-        // Nút chuyển sang bước 2
         if (snapshot.isAndroidDeviceSecure) {
             Button(
                 onClick = onChooseCoexist,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Giữ khóa hệ thống & Tiếp tục sang Bước 2")
+                Text("Tiếp tục sang Bước 2 (Tạo mã PIN)")
             }
         } else {
             Button(
                 onClick = onChooseStandalone,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Tiếp tục với chế độ Khóa DigitalLock độc lập (Bước 2)")
+                Text("Tiếp tục sang Bước 2 (Tạo mã PIN)")
             }
         }
     }
@@ -445,10 +512,10 @@ private fun Step2CreatePrimaryPin(
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
             text = "Tạo mã PIN chính",
-            style = MaterialTheme.typography.headlineLarge,
+            style = MaterialTheme.typography.headlineMedium,
         )
         Text(
-            text = "Thiết lập mã PIN từ 4 đến 12 chữ số. Dữ liệu được băm PBKDF2-HMAC-SHA256 (210.000 vòng) và mã hóa bằng Android Keystore.",
+            text = "Thiết lập mã PIN từ 4 đến 12 chữ số. Dữ liệu được băm PBKDF2-HMAC-SHA256 và mã hóa bằng Android Keystore.",
             style = MaterialTheme.typography.bodyLarge,
         )
 
@@ -457,7 +524,7 @@ private fun Step2CreatePrimaryPin(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Row(
@@ -552,7 +619,7 @@ private fun Step3RecoveryConfiguration(
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
             text = "Thiết lập Khôi phục & Sinh trắc học",
-            style = MaterialTheme.typography.headlineLarge,
+            style = MaterialTheme.typography.headlineMedium,
         )
 
         ElevatedCard(
@@ -560,7 +627,7 @@ private fun Step3RecoveryConfiguration(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
@@ -573,7 +640,7 @@ private fun Step3RecoveryConfiguration(
                     color = MaterialTheme.colorScheme.primary,
                 )
                 Text(
-                    text = "Hãy sao chép và lưu lại mã này. Hệ thống chỉ lưu bản băm đã mã hóa, không lưu bản rõ.",
+                    text = "Hãy sao chép và lưu lại mã này. Hệ thống chỉ lưu bản băm đã mã hóa.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 OutlinedButton(
@@ -594,7 +661,7 @@ private fun Step3RecoveryConfiguration(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
@@ -641,7 +708,7 @@ private fun Step3RecoveryConfiguration(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
@@ -688,7 +755,7 @@ private fun Step3RecoveryConfiguration(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .padding(18.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
