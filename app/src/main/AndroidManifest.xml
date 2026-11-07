@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -26,7 +29,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Fullscreen LockActivity (No Overlay window architecture) -->
         <activity
             android:name=".lock.LockActivity"
             android:directBootAware="true"
@@ -38,7 +40,6 @@
             android:taskAffinity="com.digitallock.locktask"
             android:theme="@style/Theme.DigitalLock.LockScreen" />
 
-        <!-- Event-driven Foreground MonitorService -->
         <service
             android:name=".service.MonitorService"
             android:directBootAware="true"
@@ -47,10 +48,9 @@
             android:foregroundServiceType="specialUse|mediaProjection">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Screen state event monitoring for user-configured DigitalLock PIN session protection" />
+                android:value="Theo doi trang thai man hinh va chup nen man hinh khoa cho DigitalLock" />
         </service>
 
-        <!-- Optional, User-Consented AccessibilityService for Window State Observation -->
         <service
             android:name=".accessibility.AccessibilityMonitor"
             android:directBootAware="true"
@@ -65,7 +65,6 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Boot & Direct-Boot Restoration Receiver -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:directBootAware="true"
@@ -78,7 +77,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Optional Enterprise/Dedicated Device Owner Admin Receiver for Lock Task Mode -->
         <receiver
             android:name=".receiver.DigitalLockDeviceAdminReceiver"
             android:description="@string/device_admin_description"
