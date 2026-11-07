@@ -2,12 +2,14 @@ package com.digitallock.ui.lock
 
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,9 +46,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -64,8 +66,10 @@ import com.digitallock.lock.PinVerificationPhase
 import component.liquid.LayerBackdrop
 import component.liquid.rememberLayerBackdrop
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlin.math.sign
 
 private data class PinPadKeySpec(
     val digit: Char,
@@ -110,15 +114,22 @@ fun LiquidGlassLockScreen(
     val mediaProjectionBitmap by mediaProjectionBitmapFlow.collectAsState()
 
     val density = LocalDensity.current
+    val maxDragPx = with(density) { 18.dp.toPx() }
     val glassController = rememberLifecycleAwareGlassController(density.density)
     val isGraphicsActive by glassController.isRenderingActive
 
     val sharedBackdrop: LayerBackdrop = rememberLayerBackdrop()
 
-    // Tracks each button's window bounds and the user's active touch/drag finger position in window coordinates
-    // so dragging across the keypad illuminates nearby buttons with an iOS 27 Liquid Glass glow!
+    // Tracks each button's bounds in root coordinates for unified hold-and-drag physics
     val buttonBoundsMap = remember { mutableStateMapOf<Char, Rect>() }
-    var activePointerInWindow by remember { mutableStateOf<Offset?>(null) }
+    var activePointerInRoot by remember { mutableStateOf<Offset?>(null) }
+    var touchDownOriginInRoot by remember { mutableStateOf<Offset?>(null) }
+    var activeHoveredDigit by remember { mutableStateOf<Char?>(null) }
+
+    val canAcceptInput = uiState.phase == PinVerificationPhase.IDLE_ENTERING &&
+        uiState.lockoutRemainingSeconds <= 0L
+    val currentCanAcceptInput by rememberUpdatedState(canAcceptInput)
+    val currentOnDigitPressed by rememberUpdatedState(onDigitPressed)
 
     val dotsShakeOffsetPx = remember { Animatable(0f) }
     LaunchedEffect(uiState.phase) {
@@ -140,7 +151,7 @@ fun LiquidGlassLockScreen(
         if (uiState.phase == PinVerificationPhase.UNLOCKING_SUCCESS) {
             screenUnlockAlpha.animateTo(
                 targetValue = 0f,
-                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
             )
         } else {
             screenUnlockAlpha.snapTo(1f)
@@ -153,17 +164,14 @@ fun LiquidGlassLockScreen(
         PinGlassConfig(
             buttonSize = 82.dp,
             restingRefractionHeight = (24f * rScale).dp,
-            pressedRefractionHeight = (30f * rScale).dp,
+            pressedRefractionHeight = (32f * rScale).dp,
             restingRefractionAmount = (28f * rScale).dp,
-            pressedRefractionAmount = (36f * rScale).dp,
+            pressedRefractionAmount = (38f * rScale).dp,
             depthEffect = true,
-            restingChromaticAberration = 0.18f * cScale,
-            pressedChromaticAberration = 0.28f * cScale,
+            restingChromaticAberration = 0.16f * cScale,
+            pressedChromaticAberration = 0.24f * cScale,
         )
     }
-
-    val canAcceptInput = uiState.phase == PinVerificationPhase.IDLE_ENTERING &&
-        uiState.lockoutRemainingSeconds <= 0L
 
     LockBackgroundRenderer.SharedRefractionBackground(
         sharedBackdrop = sharedBackdrop,
@@ -173,28 +181,38 @@ fun LiquidGlassLockScreen(
             .fillMaxSize()
             .alpha(screenUnlockAlpha.value)
             .pointerInput(Unit) {
-                awaitPointerEventScope {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val downPos = down.position
+                    touchDownOriginInRoot = downPos
+                    activePointerInRoot = downPos
+                    activeHoveredDigit = findDigitHit(downPos, buttonBoundsMap)
+
+                    var lastPos = downPos
                     while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val activeChange = event.changes.firstOrNull { it.pressed }
-                        activePointerInWindow = activeChange?.position
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                        if (change == null || !change.pressed) {
+                            // Finger lifted: if released over a PIN button, register that digit!
+                            val releasedDigit = findDigitHit(lastPos, buttonBoundsMap) ?: activeHoveredDigit
+                            if (releasedDigit != null && currentCanAcceptInput) {
+                                currentOnDigitPressed(releasedDigit)
+                            }
+                            activePointerInRoot = null
+                            touchDownOriginInRoot = null
+                            activeHoveredDigit = null
+                            break
+                        }
+                        lastPos = change.position
+                        activePointerInRoot = lastPos
+                        val hit = findDigitHit(lastPos, buttonBoundsMap)
+                        if (hit != null && hit != activeHoveredDigit) {
+                            activeHoveredDigit = hit
+                            touchDownOriginInRoot = buttonBoundsMap[hit]?.center ?: lastPos
+                        }
+                        change.consume()
                     }
                 }
-            }
-            .pointerInput(settings.biometricEnabled) {
-                var accumulatedUpwardDrag = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { accumulatedUpwardDrag = 0f },
-                    onVerticalDrag = { _, dragAmount ->
-                        if (dragAmount < 0f) {
-                            accumulatedUpwardDrag += -dragAmount
-                            if (accumulatedUpwardDrag > 140f) {
-                                accumulatedUpwardDrag = 0f
-                                onBiometricRequested()
-                            }
-                        }
-                    },
-                )
             },
     ) { _ ->
         Column(
@@ -208,7 +226,7 @@ fun LiquidGlassLockScreen(
         ) {
             Spacer(modifier = Modifier.height(36.dp))
 
-            // HEADER & DOTS CLUSTER (Matches 96372.jpg — no Dynamic Island or clock clutter)
+            // HEADER & DOTS CLUSTER (Matches 96372.jpg — clean passcode header & dots only)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth(),
@@ -248,7 +266,7 @@ fun LiquidGlassLockScreen(
                                 .clip(CircleShape)
                                 .background(
                                     color = when {
-                                        isUnlocking -> Color(0xFF7CF7C8)
+                                        isUnlocking -> Color.White
                                         isError && isFilled -> Color(0xFFFF897D)
                                         isFilled -> Color.White
                                         else -> Color.Transparent
@@ -258,7 +276,7 @@ fun LiquidGlassLockScreen(
                                 .border(
                                     width = 1.6.dp,
                                     color = when {
-                                        isUnlocking -> Color(0xFF7CF7C8)
+                                        isUnlocking -> Color.White
                                         isError -> Color(0xFFFF897D)
                                         else -> Color.White.copy(alpha = 0.88f)
                                     },
@@ -269,7 +287,7 @@ fun LiquidGlassLockScreen(
                 }
             }
 
-            // 3x4 LIQUID GLASS KEYPAD WITH INTERACTIVE TOUCH & DRAG GLOW
+            // 3x4 LIQUID GLASS KEYPAD WITH HOLD-AND-DRAG RUBBER-BAND + DEEP PURE-WHITE GLOW
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -284,13 +302,21 @@ fun LiquidGlassLockScreen(
                     ) {
                         rowSpecs.forEach { spec ->
                             val rect = buttonBoundsMap[spec.digit]
-                            val ptr = activePointerInWindow
-                            val glowIntensity = computeProximityGlow(ptr, rect)
+                            val ptr = activePointerInRoot
+                            val isCurrentActiveKey = activeHoveredDigit == spec.digit
+                            val glowIntensity = computeProximityGlow(ptr, rect, isCurrentActiveKey)
                             val localPtr = if (ptr != null && rect != null) {
                                 Offset(ptr.x - rect.left, ptr.y - rect.top)
                             } else {
                                 null
                             }
+                            val dragOffset = computeRubberBandDragOffset(
+                                pointerInRoot = ptr,
+                                originInRoot = touchDownOriginInRoot,
+                                buttonRect = rect,
+                                isActiveKey = isCurrentActiveKey,
+                                maxDragPx = maxDragPx,
+                            )
 
                             PinGlassRenderer.LiquidGlassPinButton(
                                 backdrop = sharedBackdrop,
@@ -300,11 +326,12 @@ fun LiquidGlassLockScreen(
                                 keyAngleOffsetDegrees = spec.lightAngleDegrees,
                                 externalGlowIntensity = glowIntensity,
                                 localPointerGlowOffset = localPtr,
+                                dragOffsetPx = dragOffset,
                                 onButtonPositioned = { coords ->
-                                    buttonBoundsMap[spec.digit] = coords.boundsInWindow()
+                                    buttonBoundsMap[spec.digit] = coords.boundsInRoot()
                                 },
                                 contentDescriptionText = "Số ${spec.digit}",
-                                onClick = { onDigitPressed(spec.digit) },
+                                onClick = { if (canAcceptInput) onDigitPressed(spec.digit) },
                             ) {
                                 Text(
                                     text = spec.digit.toString(),
@@ -333,13 +360,21 @@ fun LiquidGlassLockScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     val rect0 = buttonBoundsMap['0']
-                    val ptr = activePointerInWindow
-                    val glow0 = computeProximityGlow(ptr, rect0)
+                    val ptr = activePointerInRoot
+                    val isZeroActive = activeHoveredDigit == '0'
+                    val glow0 = computeProximityGlow(ptr, rect0, isZeroActive)
                     val localPtr0 = if (ptr != null && rect0 != null) {
                         Offset(ptr.x - rect0.left, ptr.y - rect0.top)
                     } else {
                         null
                     }
+                    val dragOffset0 = computeRubberBandDragOffset(
+                        pointerInRoot = ptr,
+                        originInRoot = touchDownOriginInRoot,
+                        buttonRect = rect0,
+                        isActiveKey = isZeroActive,
+                        maxDragPx = maxDragPx,
+                    )
 
                     PinGlassRenderer.LiquidGlassPinButton(
                         backdrop = sharedBackdrop,
@@ -349,11 +384,12 @@ fun LiquidGlassLockScreen(
                         keyAngleOffsetDegrees = -25f,
                         externalGlowIntensity = glow0,
                         localPointerGlowOffset = localPtr0,
+                        dragOffsetPx = dragOffset0,
                         onButtonPositioned = { coords ->
-                            buttonBoundsMap['0'] = coords.boundsInWindow()
+                            buttonBoundsMap['0'] = coords.boundsInRoot()
                         },
                         contentDescriptionText = "Số 0",
-                        onClick = { onDigitPressed('0') },
+                        onClick = { if (canAcceptInput) onDigitPressed('0') },
                     ) {
                         Text(
                             text = "0",
@@ -401,6 +437,8 @@ fun LiquidGlassLockScreen(
                             ) {
                                 if (uiState.enteredPin.isNotEmpty()) {
                                     onBackspacePressed()
+                                } else {
+                                    onBiometricRequested()
                                 }
                             }
                             .padding(vertical = 8.dp, horizontal = 12.dp),
@@ -424,13 +462,59 @@ fun LiquidGlassLockScreen(
     }
 }
 
-private fun computeProximityGlow(pointerInWindow: Offset?, buttonRect: Rect?): Float {
-    if (pointerInWindow == null || buttonRect == null) return 0f
+private fun findDigitHit(pointerInRoot: Offset, boundsMap: Map<Char, Rect>): Char? {
+    for ((digit, rect) in boundsMap) {
+        val center = rect.center
+        val radius = rect.width * 0.58f
+        if (hypot(pointerInRoot.x - center.x, pointerInRoot.y - center.y) <= radius) {
+            return digit
+        }
+    }
+    return null
+}
+
+private fun computeProximityGlow(
+    pointerInRoot: Offset?,
+    buttonRect: Rect?,
+    isActiveKey: Boolean,
+): Float {
+    if (pointerInRoot == null || buttonRect == null) return 0f
+    if (isActiveKey) return 1f
     val center = buttonRect.center
-    val dist = hypot(pointerInWindow.x - center.x, pointerInWindow.y - center.y)
-    val radius = buttonRect.width * 0.85f
-    if (dist >= radius) return 0f
-    return ((1f - dist / radius).coerceIn(0f, 1f))
+    val dist = hypot(pointerInRoot.x - center.x, pointerInRoot.y - center.y)
+    val maxRadius = buttonRect.width * 1.15f
+    if (dist >= maxRadius) return 0f
+    return ((1f - dist / maxRadius).coerceIn(0f, 1f)) * 0.85f
+}
+
+private fun computeRubberBandDragOffset(
+    pointerInRoot: Offset?,
+    originInRoot: Offset?,
+    buttonRect: Rect?,
+    isActiveKey: Boolean,
+    maxDragPx: Float,
+): Offset {
+    if (pointerInRoot == null || buttonRect == null) return Offset.Zero
+    if (!isActiveKey) {
+        // Adjacent keys subtly pull toward the finger when nearby
+        val center = buttonRect.center
+        val dx = pointerInRoot.x - center.x
+        val dy = pointerInRoot.y - center.y
+        val dist = hypot(dx, dy)
+        val influenceRadius = buttonRect.width * 1.25f
+        if (dist >= influenceRadius || dist < 1f) return Offset.Zero
+        val pull = (1f - dist / influenceRadius) * (maxDragPx * 0.32f)
+        return Offset((dx / dist) * pull, (dy / dist) * pull)
+    }
+    val baseOrigin = originInRoot ?: buttonRect.center
+    val rawDx = pointerInRoot.x - baseOrigin.x
+    val rawDy = pointerInRoot.y - baseOrigin.y
+    val span = (buttonRect.width * 1.2f).coerceAtLeast(1f)
+    val fracX = (rawDx / span).coerceIn(-1f, 1f)
+    val fracY = (rawDy / span).coerceIn(-1f, 1f)
+    val dampedX = maxDragPx * fracX.sign * EaseOut.transform(abs(fracX))
+    val dampedY = maxDragPx * fracY.sign * EaseOut.transform(abs(fracY))
+    return Offset(dampedX, dampedY)
 }
 
 @Composable
