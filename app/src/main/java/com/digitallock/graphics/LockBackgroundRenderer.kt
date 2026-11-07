@@ -1,16 +1,14 @@
 package com.digitallock.graphics
 
+import android.annotation.SuppressLint
+import android.app.WallpaperManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.media.projection.MediaProjection
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
+import android.os.Environment
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
@@ -42,7 +40,7 @@ import java.io.FileOutputStream
 
 enum class BackgroundTextureSource {
     USER_SELECTED_URI,
-    MEDIA_PROJECTION_FRAME,
+    CAPTURED_LOCKSCREEN_WALLPAPER,
     PROCEDURAL_LIQUID_DEPTH,
 }
 
@@ -52,19 +50,18 @@ object BackdropCaptureStore {
     private val _capturedBitmapFlow = MutableStateFlow<Bitmap?>(null)
     val capturedBitmapFlow: StateFlow<Bitmap?> = _capturedBitmapFlow.asStateFlow()
 
-    private val _isMediaProjectionActive = MutableStateFlow(false)
-    val isMediaProjectionActive: StateFlow<Boolean> = _isMediaProjectionActive.asStateFlow()
+    private val _hasCapturedLockWallpaper = MutableStateFlow(false)
+    val hasCapturedLockWallpaper: StateFlow<Boolean> = _hasCapturedLockWallpaper.asStateFlow()
 
-    fun setMediaProjectionActive(active: Boolean) {
-        _isMediaProjectionActive.value = active
-    }
+    fun hasAllFilesAccess(): Boolean = Environment.isExternalStorageManager()
 
     fun updateCapturedBitmap(context: Context, bitmap: Bitmap) {
         _capturedBitmapFlow.value = bitmap
+        _hasCapturedLockWallpaper.value = true
         try {
             val file = File(context.applicationContext.filesDir, CAPTURED_FILE_NAME)
             FileOutputStream(file).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 92, out)
+                bitmap.compress(Bitmap.CompressFormat.PNG, 94, out)
             }
         } catch (_: Throwable) {
         }
@@ -72,18 +69,69 @@ object BackdropCaptureStore {
 
     fun loadPersistedBitmapIfNeeded(context: Context): Bitmap? {
         _capturedBitmapFlow.value?.let { return it }
-        return try {
-            val file = File(context.applicationContext.filesDir, CAPTURED_FILE_NAME)
-            if (file.exists()) {
-                BitmapFactory.decodeFile(file.absolutePath)?.also {
-                    _capturedBitmapFlow.value = it
+        val file = File(context.applicationContext.filesDir, CAPTURED_FILE_NAME)
+        if (file.exists()) {
+            try {
+                BitmapFactory.decodeFile(file.absolutePath)?.let { bmp ->
+                    _capturedBitmapFlow.value = bmp
+                    _hasCapturedLockWallpaper.value = true
+                    return bmp
                 }
-            } else {
-                null
+            } catch (_: Throwable) {
+            }
+        }
+        return captureLockWallpaperOnceFromSystem(context)
+    }
+
+    /**
+     * Reads the user's Lock Screen Wallpaper (or System Wallpaper) 1 single time via WallpaperManager
+     * and caches it to `captured_lock_backdrop.png` so no screen-recording (MediaProjection) is ever used.
+     */
+    @SuppressLint("MissingPermission")
+    fun captureLockWallpaperOnceFromSystem(context: Context): Bitmap? {
+        val wm = WallpaperManager.getInstance(context) ?: return null
+
+        // 1. Try reading Lock Screen wallpaper file directly (FLAG_LOCK)
+        try {
+            wm.getWallpaperFile(WallpaperManager.FLAG_LOCK)?.use { pfd ->
+                BitmapFactory.decodeFileDescriptor(pfd.fileDescriptor)?.let { bmp ->
+                    updateCapturedBitmap(context, bmp)
+                    return bmp
+                }
             }
         } catch (_: Throwable) {
-            null
         }
+
+        // 2. Fallback: Try reading System wallpaper file (FLAG_SYSTEM)
+        try {
+            wm.getWallpaperFile(WallpaperManager.FLAG_SYSTEM)?.use { pfd ->
+                BitmapFactory.decodeFileDescriptor(pfd.fileDescriptor)?.let { bmp ->
+                    updateCapturedBitmap(context, bmp)
+                    return bmp
+                }
+            }
+        } catch (_: Throwable) {
+        }
+
+        // 3. Fallback: Try WallpaperManager.getDrawable()
+        try {
+            val drawable = wm.drawable
+            if (drawable is BitmapDrawable && drawable.bitmap != null) {
+                updateCapturedBitmap(context, drawable.bitmap)
+                return drawable.bitmap
+            } else if (drawable != null) {
+                val w = drawable.intrinsicWidth.coerceAtLeast(1080)
+                val h = drawable.intrinsicHeight.coerceAtLeast(2400)
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                val canvas = AndroidCanvas(bmp)
+                drawable.setBounds(0, 0, w, h)
+                drawable.draw(canvas)
+                updateCapturedBitmap(context, bmp)
+                return bmp
+            }
+        } catch (_: Throwable) {
+        }
+        return null
     }
 }
 
@@ -99,10 +147,10 @@ object LockBackgroundRenderer {
     ) {
         val context = LocalContext.current
         var userBitmap by remember { mutableStateOf<Bitmap?>(null) }
-        val storedProjectionBitmap by BackdropCaptureStore.capturedBitmapFlow.collectAsState()
+        val storedWallpaperBitmap by BackdropCaptureStore.capturedBitmapFlow.collectAsState()
 
         LaunchedEffect(Unit) {
-            if (storedProjectionBitmap == null) {
+            if (storedWallpaperBitmap == null) {
                 withContext(Dispatchers.IO) {
                     BackdropCaptureStore.loadPersistedBitmapIfNeeded(context)
                 }
@@ -119,11 +167,11 @@ object LockBackgroundRenderer {
             }
         }
 
-        val effectiveProjectionBitmap = mediaProjectionBitmap ?: storedProjectionBitmap
+        val effectiveCapturedBitmap = mediaProjectionBitmap ?: storedWallpaperBitmap
 
         val activeSource = when {
-            effectiveProjectionBitmap != null -> BackgroundTextureSource.MEDIA_PROJECTION_FRAME
             userBitmap != null -> BackgroundTextureSource.USER_SELECTED_URI
+            effectiveCapturedBitmap != null -> BackgroundTextureSource.CAPTURED_LOCKSCREEN_WALLPAPER
             else -> BackgroundTextureSource.PROCEDURAL_LIQUID_DEPTH
         }
 
@@ -134,8 +182,8 @@ object LockBackgroundRenderer {
                     .layerBackdrop(sharedBackdrop),
             ) {
                 when (activeSource) {
-                    BackgroundTextureSource.MEDIA_PROJECTION_FRAME -> {
-                        effectiveProjectionBitmap?.let { bmp ->
+                    BackgroundTextureSource.USER_SELECTED_URI -> {
+                        userBitmap?.let { bmp ->
                             Image(
                                 bitmap = bmp.asImageBitmap(),
                                 contentDescription = null,
@@ -145,8 +193,8 @@ object LockBackgroundRenderer {
                         }
                     }
 
-                    BackgroundTextureSource.USER_SELECTED_URI -> {
-                        userBitmap?.let { bmp ->
+                    BackgroundTextureSource.CAPTURED_LOCKSCREEN_WALLPAPER -> {
+                        effectiveCapturedBitmap?.let { bmp ->
                             Image(
                                 bitmap = bmp.asImageBitmap(),
                                 contentDescription = null,
@@ -182,7 +230,6 @@ object LockBackgroundRenderer {
                 ),
             )
 
-            // Upper-right cobalt/sapphire lobe matching 96372.jpg
             val upperWave = Path().apply {
                 moveTo(w * 0.36f, 0f)
                 cubicTo(
@@ -211,7 +258,6 @@ object LockBackgroundRenderer {
                 ),
             )
 
-            // Lower-left emerald/teal lobe intersecting the PIN grid matching 96372.jpg
             val emeraldWave = Path().apply {
                 moveTo(0f, h * 0.33f)
                 cubicTo(
@@ -240,7 +286,6 @@ object LockBackgroundRenderer {
                 ),
             )
 
-            // Bottom sweeping blue-violet lobe matching 96372.jpg
             val bottomSweep = Path().apply {
                 moveTo(0f, h * 0.94f)
                 cubicTo(
@@ -264,88 +309,6 @@ object LockBackgroundRenderer {
                     endY = h,
                 ),
             )
-        }
-    }
-
-    fun captureSingleFrameFromMediaProjection(
-        mediaProjection: MediaProjection,
-        width: Int,
-        height: Int,
-        densityDpi: Int,
-        stopProjectionAfterCapture: Boolean = false,
-        onFrameCaptured: (Bitmap?) -> Unit,
-    ) {
-        val mainHandler = Handler(Looper.getMainLooper())
-        val imageReader = ImageReader.newInstance(
-            width.coerceAtLeast(360),
-            height.coerceAtLeast(640),
-            PixelFormat.RGBA_8888,
-            2,
-        )
-        var virtualDisplay: VirtualDisplay? = null
-        var captured = false
-
-        val projectionCallback = object : MediaProjection.Callback() {
-            override fun onStop() {
-                virtualDisplay?.release()
-                virtualDisplay = null
-                imageReader.close()
-            }
-        }
-        mediaProjection.registerCallback(projectionCallback, mainHandler)
-
-        try {
-            virtualDisplay = mediaProjection.createVirtualDisplay(
-                "DigitalLockBackdropCapture",
-                width.coerceAtLeast(360),
-                height.coerceAtLeast(640),
-                densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader.surface,
-                null,
-                mainHandler,
-            )
-
-            imageReader.setOnImageAvailableListener({ reader ->
-                if (captured) return@setOnImageAvailableListener
-                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                captured = true
-                try {
-                    val plane = image.planes[0]
-                    val buffer = plane.buffer
-                    val pixelStride = plane.pixelStride
-                    val rowStride = plane.rowStride
-                    val rowPadding = rowStride - pixelStride * image.width
-                    val rawBitmap = Bitmap.createBitmap(
-                        image.width + rowPadding / pixelStride,
-                        image.height,
-                        Bitmap.Config.ARGB_8888,
-                    )
-                    rawBitmap.copyPixelsFromBuffer(buffer)
-                    val cropped = Bitmap.createBitmap(rawBitmap, 0, 0, image.width, image.height)
-                    if (cropped != rawBitmap) rawBitmap.recycle()
-                    onFrameCaptured(cropped)
-                } catch (_: Throwable) {
-                    onFrameCaptured(null)
-                } finally {
-                    image.close()
-                    virtualDisplay?.release()
-                    virtualDisplay = null
-                    reader.close()
-                    mediaProjection.unregisterCallback(projectionCallback)
-                    if (stopProjectionAfterCapture) {
-                        try {
-                            mediaProjection.stop()
-                        } catch (_: Throwable) {
-                        }
-                    }
-                }
-            }, mainHandler)
-        } catch (_: Throwable) {
-            virtualDisplay?.release()
-            imageReader.close()
-            mediaProjection.unregisterCallback(projectionCallback)
-            onFrameCaptured(null)
         }
     }
 
