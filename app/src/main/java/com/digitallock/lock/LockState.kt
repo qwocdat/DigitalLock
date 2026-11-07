@@ -19,7 +19,7 @@ data class LockUiState(
     val targetPinLength: Int = 6,
     val isAlphanumeric: Boolean = false,
     val phase: PinVerificationPhase = PinVerificationPhase.IDLE_ENTERING,
-    val statusPrompt: String = "Swipe up for Biometrics or Enter Passcode",
+    val statusPrompt: String = "Vuốt lên để mở bằng Sinh trắc học hoặc Nhập PIN",
     val failedAttempts: Int = 0,
     val lockoutRemainingSeconds: Long = 0L,
     val activeRecoverySheet: ActiveRecoverySheet = ActiveRecoverySheet.NONE,
