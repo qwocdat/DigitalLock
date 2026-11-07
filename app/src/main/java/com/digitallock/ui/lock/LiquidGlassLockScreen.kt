@@ -468,7 +468,7 @@ fun LiquidGlassLockScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Emergency",
+                        text = "Khôi phục",
                         color = Color.White.copy(alpha = 0.90f),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
@@ -483,7 +483,7 @@ fun LiquidGlassLockScreen(
                     )
 
                     Text(
-                        text = if (uiState.enteredPin.isEmpty()) "Cancel" else "Delete",
+                        text = if (uiState.enteredPin.isEmpty()) "Hủy" else "Xóa",
                         color = Color.White.copy(alpha = 0.90f),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
@@ -668,9 +668,9 @@ private fun LiquidGlassRecoverySheet(
             ) {
                 Text(
                     text = if (activeSheet == ActiveRecoverySheet.RECOVERY_CODE) {
-                        "Emergency Recovery Code"
+                        "Khôi phục bằng Mã dự phòng"
                     } else {
-                        "Security Question Recovery"
+                        "Khôi phục bằng Câu hỏi bảo mật"
                     },
                     color = Color.White,
                     fontSize = 20.sp,
@@ -679,9 +679,9 @@ private fun LiquidGlassRecoverySheet(
 
                 Text(
                     text = if (activeSheet == ActiveRecoverySheet.RECOVERY_CODE) {
-                        "Enter your 16-character one-time setup Recovery Code (XXXX-XXXX-XXXX-XXXX) or enter your Secondary PIN directly on the main keypad."
+                        "Nhập Mã khôi phục 16 ký tự (XXXX-XXXX-XXXX-XXXX) hoặc đóng hộp thoại này để nhập trực tiếp Mã PIN phụ trên bàn phím kính."
                     } else {
-                        securityQuestionPrompt ?: "No Security Question configured."
+                        securityQuestionPrompt ?: "Chưa thiết lập câu hỏi bảo mật."
                     },
                     color = Color.White.copy(alpha = 0.80f),
                     fontSize = 14.sp,
@@ -712,9 +712,9 @@ private fun LiquidGlassRecoverySheet(
                     if (!securityQuestionPrompt.isNullOrBlank()) {
                         Text(
                             text = if (activeSheet == ActiveRecoverySheet.RECOVERY_CODE) {
-                                "Use Security Question"
+                                "Dùng Câu hỏi bảo mật"
                             } else {
-                                "Use Recovery Code"
+                                "Dùng Mã khôi phục"
                             },
                             color = Color(0xFF98FFE8),
                             fontSize = 14.sp,
@@ -736,7 +736,7 @@ private fun LiquidGlassRecoverySheet(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Text(
-                            text = "Close",
+                            text = "Đóng",
                             color = Color.White.copy(alpha = 0.75f),
                             fontSize = 15.sp,
                             modifier = Modifier
@@ -744,7 +744,7 @@ private fun LiquidGlassRecoverySheet(
                                 .padding(8.dp),
                         )
                         Text(
-                            text = "Verify",
+                            text = "Xác nhận",
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
