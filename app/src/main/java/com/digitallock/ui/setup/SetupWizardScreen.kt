@@ -9,7 +9,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.projection.MediaProjectionManager
+import android.os.Environment
+import com.digitallock.accessibility.AccessibilityMonitor
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -185,7 +186,7 @@ fun SetupWizardScreen(
 
     var currentStep by remember { mutableIntStateOf(1) }
     var snapshot by remember { mutableStateOf(lockRepository.querySystemSecuritySnapshot()) }
-    val isProjectionActive by BackdropCaptureStore.isMediaProjectionActive.collectAsState()
+    val isProjectionActive by BackdropCaptureStore.hasCapturedLockWallpaper.collectAsState()
 
     var notificationGranted by remember {
         mutableStateOf(
@@ -206,12 +207,11 @@ fun SetupWizardScreen(
         notificationGranted = granted
     }
 
-    val mediaProjectionLauncher = rememberLauncherForActivityResult(
+    val allFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            MonitorService.initMediaProjectionSession(context, result.resultCode, result.data!!)
-        }
+    ) {
+        BackdropCaptureStore.captureLockWallpaperOnceFromSystem(context)
+        AccessibilityMonitor.instance?.captureLockscreenOnceIfNeeded(forceCapture = true)
     }
 
     var selectedMode by remember {
@@ -292,9 +292,20 @@ fun SetupWizardScreen(
                     },
                     onOpenAutostartSettings = { openAutostartAndBackgroundPermissions(context) },
                     onRequestMediaProjection = {
-                        val mpm = context.getSystemService(MediaProjectionManager::class.java)
-                        if (mpm != null) {
-                            mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+                        if (!Environment.isExternalStorageManager()) {
+                            try {
+                                allFilesLauncher.launch(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                        Uri.parse("package:${context.packageName}"),
+                                    )
+                                )
+                            } catch (_: Throwable) {
+                                BackdropCaptureStore.captureLockWallpaperOnceFromSystem(context)
+                            }
+                        } else {
+                            BackdropCaptureStore.captureLockWallpaperOnceFromSystem(context)
+                            AccessibilityMonitor.instance?.captureLockscreenOnceIfNeeded(forceCapture = true)
                         }
                     },
                     onRequestIgnoreBatteryOptimization = {
@@ -454,8 +465,8 @@ private fun Step1KeyguardAndPermissionsCheck(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        if (isProjectionActive) "4. Quyền Chụp nền màn hình khóa (Android): Đã cấp ✓"
-                        else "4. Bấm cấp quyền Chụp màn hình làm nền khóa (MediaProjection)"
+                        if (isProjectionActive) "4. Đã lấy hình nền màn hình khóa 1 lần duy nhất ✓"
+                        else "4. Bấm cấp quyền Lấy hình nền màn hình khóa (1 lần duy nhất)"
                     )
                 }
 
