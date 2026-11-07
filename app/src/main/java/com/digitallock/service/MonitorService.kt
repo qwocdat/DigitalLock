@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -17,15 +18,6 @@ import com.digitallock.lock.LockActivity
 import com.digitallock.lock.LockController
 import com.digitallock.receiver.ScreenStateReceiver
 
-/**
- * Event-driven Foreground MonitorService for DigitalLock.
- *
- * Responsibilities:
- * - Registers [ScreenStateReceiver] dynamically for `ACTION_SCREEN_OFF`, `ACTION_SCREEN_ON`,
- *   and `ACTION_USER_PRESENT` (Android does not allow manifest receivers for `SCREEN_ON`/`OFF`).
- * - Coordinates session lock state with [LockController] without any battery-draining polling loop.
- * - Restores state cleanly (`START_STICKY`) if the OS reclaims and restarts the process.
- */
 class MonitorService : Service() {
 
     private var screenStateReceiver: ScreenStateReceiver? = null
@@ -33,7 +25,16 @@ class MonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildStatusNotification())
+        val notification = buildStatusNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         registerScreenStateReceiver()
     }
 
@@ -90,10 +91,10 @@ class MonitorService : Service() {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "DigitalLock Protection Service",
+            "Dịch vụ bảo vệ DigitalLock",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Maintains event-driven screen state monitoring for DigitalLock."
+            description = "Duy trì theo dõi sự kiện tắt/bật màn hình cho DigitalLock."
             setShowBadge(false)
         }
         nm.createNotificationChannel(channel)
@@ -111,8 +112,8 @@ class MonitorService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
-            .setContentTitle("DigitalLock Active")
-            .setContentText("Event-driven screen state protection is running. Tap to open lock screen.")
+            .setContentTitle("DigitalLock đang bảo vệ")
+            .setContentText("Đang theo dõi trạng thái khóa màn hình. Chạm để mở màn hình khóa.")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
@@ -131,8 +132,6 @@ class MonitorService : Service() {
             try {
                 context.startForegroundService(intent)
             } catch (_: Throwable) {
-                // On Android 12+, ForegroundServiceStartNotAllowedException can occur if started
-                // from restricted background contexts; handled cleanly without crashing.
             }
         }
     }
