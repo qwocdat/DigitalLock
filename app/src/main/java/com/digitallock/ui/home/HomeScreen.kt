@@ -2,7 +2,9 @@ package com.digitallock.ui.home
 
 import android.app.Activity
 import android.content.Intent
-import android.media.projection.MediaProjectionManager
+import android.os.Environment
+import com.digitallock.accessibility.AccessibilityMonitor
+import com.digitallock.lock.LockController
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -67,7 +69,7 @@ fun HomeScreen(
 
     val settings by settingsRepository.settingsFlow.collectAsState()
     val lastDiag by lockRepository.lastDiagnostic.collectAsState()
-    val isProjectionActive by BackdropCaptureStore.isMediaProjectionActive.collectAsState()
+    val isProjectionActive by BackdropCaptureStore.hasCapturedLockWallpaper.collectAsState()
     var snapshot by remember { mutableStateOf(lockRepository.querySystemSecuritySnapshot()) }
 
     DisposableEffect(lifecycleOwner) {
@@ -95,12 +97,11 @@ fun HomeScreen(
         }
     }
 
-    val mediaProjectionLauncher = rememberLauncherForActivityResult(
+    val allFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            MonitorService.initMediaProjectionSession(context, result.resultCode, result.data!!)
-        }
+    ) {
+        BackdropCaptureStore.captureLockWallpaperOnceFromSystem(context)
+        AccessibilityMonitor.instance?.captureLockscreenOnceIfNeeded(forceCapture = true)
     }
 
     Column(
@@ -158,11 +159,8 @@ fun HomeScreen(
 
                 Button(
                     onClick = {
-                        context.startActivity(
-                            Intent(context, LockActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                        )
+                        LockController(context, settingsRepository, lockRepository)
+                            .requestLockScreen("ManualTestFromHome")
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -245,16 +243,27 @@ fun HomeScreen(
 
                 OutlinedButton(
                     onClick = {
-                        val mpm = context.getSystemService(MediaProjectionManager::class.java)
-                        if (mpm != null) {
-                            mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+                        if (!Environment.isExternalStorageManager()) {
+                            try {
+                                allFilesLauncher.launch(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                        Uri.parse("package:${context.packageName}"),
+                                    )
+                                )
+                            } catch (_: Throwable) {
+                                BackdropCaptureStore.captureLockWallpaperOnceFromSystem(context)
+                            }
+                        } else {
+                            BackdropCaptureStore.captureLockWallpaperOnceFromSystem(context)
+                            AccessibilityMonitor.instance?.captureLockscreenOnceIfNeeded(forceCapture = true)
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        if (isProjectionActive) "4. Chụp nền màn hình khóa (Android): Đã bật ✓"
-                        else "4. Cấp quyền Chụp màn hình làm nền khóa (MediaProjection)"
+                        if (isProjectionActive) "4. Đã lấy hình nền màn hình khóa (1 lần duy nhất) ✓"
+                        else "4. Cấp quyền Lấy hình nền màn hình khóa (1 lần duy nhất)"
                     )
                 }
 
@@ -290,7 +299,7 @@ fun HomeScreen(
                 )
                 Text(
                     text = when {
-                        isProjectionActive -> "Nguồn nền: Đang dùng ảnh chụp màn hình khóa thực tế (MediaProjection)"
+                        isProjectionActive -> "Nguồn nền: Đang dùng hình nền màn hình khóa đã lấy 1 lần"
                         settings.customWallpaperUri != null -> "Nguồn nền: Ảnh tùy chỉnh từ thư viện của bạn"
                         else -> "Nguồn nền: Nền sóng Liquid Glass chuẩn iOS 27"
                     },
