@@ -8,43 +8,34 @@ import android.os.Build
 import android.view.accessibility.AccessibilityEvent
 import com.digitallock.data.LockRepository
 import com.digitallock.data.SettingsRepository
-import com.digitallock.lock.LockActivity
 import com.digitallock.lock.LockController
 import com.digitallock.lock.SessionManager
 import com.digitallock.receiver.ScreenStateReceiver
 
-/**
- * Optional, user-consented AccessibilityService for DigitalLock.
- *
- * Strict privacy & security contract:
- * - `canRetrieveWindowContent` is `false` (never reads text fields, passwords, or personal content).
- * - Only observes top-level window state transitions (`TYPE_WINDOW_STATE_CHANGED`) and screen
- *   on/off events to enforce an active locked session when the user swipes Home or switches apps
- *   before completing PIN verification.
- */
 class AccessibilityMonitor : AccessibilityService() {
 
     private var screenReceiver: ScreenStateReceiver? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         serviceInfo = AccessibilityServiceInfo().apply {
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            notificationTimeout = 150L
+            notificationTimeout = 80L
             flags = AccessibilityServiceInfo.DEFAULT
         }
         registerScreenReceiver()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        val pkgName = event.packageName?.toString() ?: return
+        val pkgName = event?.packageName?.toString() ?: return
 
-        // Ignore our own LockActivity or system permission dialogs/biometric prompt overlays
         if (pkgName == packageName ||
             pkgName == "com.android.systemui" ||
-            pkgName.contains("biometric", ignoreCase = true)
+            pkgName.contains("biometric", ignoreCase = true) ||
+            pkgName.contains("permissioncontroller", ignoreCase = true)
         ) {
             return
         }
@@ -53,7 +44,7 @@ class AccessibilityMonitor : AccessibilityService() {
         val settings = settingsRepo.currentSettings()
         if (!settings.setupCompleted || !settings.lockEnabled) return
 
-        if (SessionManager.shouldRequireLockNow()) {
+        if (SessionManager.shouldRequireLockNow() && !SessionManager.isLockActivityVisible.value) {
             val lockRepo = LockRepository(this)
             LockController(this, settingsRepo, lockRepo)
                 .requestLockScreen("AccessibilityWindowStateChanged")
@@ -63,8 +54,19 @@ class AccessibilityMonitor : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onUnbind(intent: Intent?): Boolean {
+        if (instance === this) {
+            instance = null
+        }
         unregisterScreenReceiver()
         return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        if (instance === this) {
+            instance = null
+        }
+        unregisterScreenReceiver()
+        super.onDestroy()
     }
 
     private fun registerScreenReceiver() {
@@ -91,5 +93,11 @@ class AccessibilityMonitor : AccessibilityService() {
             }
             screenReceiver = null
         }
+    }
+
+    companion object {
+        @Volatile
+        var instance: AccessibilityMonitor? = null
+            private set
     }
 }
