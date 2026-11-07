@@ -3,13 +3,7 @@ package com.digitallock.ui.lock
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,10 +26,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,14 +40,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -64,14 +61,10 @@ import com.digitallock.graphics.rememberLifecycleAwareGlassController
 import com.digitallock.lock.ActiveRecoverySheet
 import com.digitallock.lock.LockUiState
 import com.digitallock.lock.PinVerificationPhase
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.StateFlow
-import androidx.compose.material3.Text
 import component.liquid.LayerBackdrop
 import component.liquid.rememberLayerBackdrop
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private data class PinPadKeySpec(
@@ -98,16 +91,6 @@ private val PIN_GRID_ROWS: List<List<PinPadKeySpec>> = listOf(
     ),
 )
 
-/**
- * Pure iOS 27 Inspired Liquid Glass Lock Screen (UI System B).
- *
- * Strictly separated from Material 3 Expressive:
- * - Uses a single shared `LayerBackdrop` captured from `LockBackgroundRenderer.SharedRefractionBackground`.
- * - Each of the circular PIN keys (`1..9`, `0`) is an independent refractive glass surface
- *   via `PinGlassRenderer.LiquidGlassPinButton`.
- * - Zero button zoom/scale or translation on touch.
- * - Localized horizontal shake animation strictly on the PIN dot indicator cluster when a wrong PIN is entered.
- */
 @Composable
 fun LiquidGlassLockScreen(
     uiStateFlow: StateFlow<LockUiState>,
@@ -130,44 +113,21 @@ fun LiquidGlassLockScreen(
     val glassController = rememberLifecycleAwareGlassController(density.density)
     val isGraphicsActive by glassController.isRenderingActive
 
-    // Single shared backdrop used by all PIN buttons and capsules
     val sharedBackdrop: LayerBackdrop = rememberLayerBackdrop()
 
-    // Subtle slow ambient wave breathing (paused when screen is not active)
-    val infiniteTransition = rememberInfiniteTransition(label = "LiquidAmbient")
-    val ambientPhase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 11_000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "AmbientWavePhase",
-    )
+    // Tracks each button's window bounds and the user's active touch/drag finger position in window coordinates
+    // so dragging across the keypad illuminates nearby buttons with an iOS 27 Liquid Glass glow!
+    val buttonBoundsMap = remember { mutableStateMapOf<Char, Rect>() }
+    var activePointerInWindow by remember { mutableStateOf<Offset?>(null) }
 
-    // Clock & Date state updated on minute ticks
-    var currentTimeText by remember { mutableStateOf("") }
-    var currentDateText by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) {
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val dateFormat = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
-        while (true) {
-            val now = Date()
-            currentTimeText = timeFormat.format(now)
-            currentDateText = dateFormat.format(now)
-            delay(15_000L)
-        }
-    }
-
-    // Horizontal shake animation localized strictly to the PIN indicator cluster
     val dotsShakeOffsetPx = remember { Animatable(0f) }
     LaunchedEffect(uiState.phase) {
         if (uiState.phase == PinVerificationPhase.ERROR_SHAKE) {
-            val keyframes = floatArrayOf(-22f, 22f, -16f, 16f, -9f, 9f, 0f)
+            val keyframes = floatArrayOf(-20f, 20f, -14f, 14f, -8f, 8f, 0f)
             for (target in keyframes) {
                 dotsShakeOffsetPx.animateTo(
                     targetValue = target,
-                    animationSpec = tween(durationMillis = 52),
+                    animationSpec = tween(durationMillis = 42),
                 )
             }
         } else {
@@ -175,13 +135,12 @@ fun LiquidGlassLockScreen(
         }
     }
 
-    // Smooth unlock fade-out transition
     val screenUnlockAlpha = remember { Animatable(1f) }
     LaunchedEffect(uiState.phase) {
         if (uiState.phase == PinVerificationPhase.UNLOCKING_SUCCESS) {
             screenUnlockAlpha.animateTo(
                 targetValue = 0f,
-                animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
             )
         } else {
             screenUnlockAlpha.snapTo(1f)
@@ -192,14 +151,14 @@ fun LiquidGlassLockScreen(
         val rScale = settings.refractionIntensityScale.coerceIn(0.5f, 1.5f)
         val cScale = settings.chromaticAberrationScale.coerceIn(0.0f, 1.5f)
         PinGlassConfig(
-            buttonSize = 80.dp,
-            restingRefractionHeight = (18f * rScale).dp,
-            pressedRefractionHeight = (22f * rScale).dp,
-            restingRefractionAmount = (20f * rScale).dp,
-            pressedRefractionAmount = (26f * rScale).dp,
+            buttonSize = 82.dp,
+            restingRefractionHeight = (24f * rScale).dp,
+            pressedRefractionHeight = (30f * rScale).dp,
+            restingRefractionAmount = (28f * rScale).dp,
+            pressedRefractionAmount = (36f * rScale).dp,
             depthEffect = true,
-            restingChromaticAberration = 0.14f * cScale,
-            pressedChromaticAberration = 0.20f * cScale,
+            restingChromaticAberration = 0.18f * cScale,
+            pressedChromaticAberration = 0.28f * cScale,
         )
     }
 
@@ -210,10 +169,18 @@ fun LiquidGlassLockScreen(
         sharedBackdrop = sharedBackdrop,
         customWallpaperUri = settings.customWallpaperUri,
         mediaProjectionBitmap = mediaProjectionBitmap,
-        ambientPhase = if (isGraphicsActive) ambientPhase else 0.5f,
         modifier = Modifier
             .fillMaxSize()
             .alpha(screenUnlockAlpha.value)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val activeChange = event.changes.firstOrNull { it.pressed }
+                        activePointerInWindow = activeChange?.position
+                    }
+                }
+            }
             .pointerInput(settings.biometricEnabled) {
                 var accumulatedUpwardDrag = 0f
                 detectVerticalDragGestures(
@@ -221,7 +188,7 @@ fun LiquidGlassLockScreen(
                     onVerticalDrag = { _, dragAmount ->
                         if (dragAmount < 0f) {
                             accumulatedUpwardDrag += -dragAmount
-                            if (accumulatedUpwardDrag > 120f) {
+                            if (accumulatedUpwardDrag > 140f) {
                                 accumulatedUpwardDrag = 0f
                                 onBiometricRequested()
                             }
@@ -234,102 +201,14 @@ fun LiquidGlassLockScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(horizontal = 28.dp, vertical = 16.dp),
+                .navigationBarsPadding()
+                .padding(horizontal = 28.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            // TOP SECTION: Dynamic Island Security Pill + Clock & Date
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Left quick action: MediaProjection live texture consent button
-                    PinGlassRenderer.LiquidGlassPinButton(
-                        backdrop = sharedBackdrop,
-                        enabled = true,
-                        isGraphicsActive = isGraphicsActive,
-                        config = tunedPinConfig.copy(buttonSize = 42.dp),
-                        contentDescriptionText = "Capture live wallpaper backdrop",
-                        onClick = onRequestMediaProjectionBackdrop,
-                    ) {
-                        Text(
-                            text = "◉",
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontSize = 15.sp,
-                        )
-                    }
+            Spacer(modifier = Modifier.height(36.dp))
 
-                    // Center iOS-style Security Capsule (Lock + Face/Biometric icon)
-                    PinGlassRenderer.LiquidGlassCapsule(
-                        backdrop = sharedBackdrop,
-                        isGraphicsActive = isGraphicsActive,
-                        cornerRadius = 28.dp,
-                        modifier = Modifier
-                            .width(196.dp)
-                            .height(50.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = onBiometricRequested,
-                            ),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            LockPadlockGlyph(
-                                unlocked = uiState.phase == PinVerificationPhase.UNLOCKING_SUCCESS,
-                            )
-                            BiometricScannerGlyph(
-                                active = settings.biometricEnabled,
-                            )
-                        }
-                    }
-
-                    // Right quick action: Recovery options menu
-                    PinGlassRenderer.LiquidGlassPinButton(
-                        backdrop = sharedBackdrop,
-                        enabled = true,
-                        isGraphicsActive = isGraphicsActive,
-                        config = tunedPinConfig.copy(buttonSize = 42.dp),
-                        contentDescriptionText = "Open recovery methods",
-                        onClick = { onOpenRecoverySheet(ActiveRecoverySheet.RECOVERY_CODE) },
-                    ) {
-                        Text(
-                            text = "⋮",
-                            color = Color.White.copy(alpha = 0.90f),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Text(
-                    text = currentTimeText,
-                    color = Color.White.copy(alpha = 0.96f),
-                    fontSize = 52.sp,
-                    fontWeight = FontWeight.Light,
-                    fontFamily = FontFamily.SansSerif,
-                )
-                Text(
-                    text = currentDateText,
-                    color = Color.White.copy(alpha = 0.76f),
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Normal,
-                )
-            }
-
-            // MIDDLE SECTION: Prompt + PIN Indicator Dots Cluster
+            // HEADER & DOTS CLUSTER (Matches 96372.jpg — no Dynamic Island or clock clutter)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth(),
@@ -339,21 +218,22 @@ fun LiquidGlassLockScreen(
                     color = if (uiState.phase == PinVerificationPhase.ERROR_SHAKE) {
                         Color(0xFFFFB4AB)
                     } else {
-                        Color.White.copy(alpha = 0.92f)
+                        Color.White.copy(alpha = 0.94f)
                     },
-                    fontSize = 18.sp,
+                    fontSize = 20.sp,
+                    lineHeight = 27.sp,
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
 
-                Spacer(modifier = Modifier.height(22.dp))
+                Spacer(modifier = Modifier.height(26.dp))
 
                 Row(
                     modifier = Modifier.offset {
                         IntOffset(dotsShakeOffsetPx.value.roundToInt(), 0)
                     },
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val totalDots = uiState.targetPinLength.coerceIn(4, 12)
@@ -380,7 +260,7 @@ fun LiquidGlassLockScreen(
                                     color = when {
                                         isUnlocking -> Color(0xFF7CF7C8)
                                         isError -> Color(0xFFFF897D)
-                                        else -> Color.White.copy(alpha = 0.86f)
+                                        else -> Color.White.copy(alpha = 0.88f)
                                     },
                                     shape = CircleShape,
                                 ),
@@ -389,40 +269,53 @@ fun LiquidGlassLockScreen(
                 }
             }
 
-            // BOTTOM SECTION: 3x4 Circular Liquid Glass PIN Keypad + Bottom Bar
+            // 3x4 LIQUID GLASS KEYPAD WITH INTERACTIVE TOUCH & DRAG GLOW
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 12.dp),
+                    .padding(bottom = 8.dp),
             ) {
-                // Rows 1..3 (Keys 1..9)
                 PIN_GRID_ROWS.forEach { rowSpecs ->
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(26.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         rowSpecs.forEach { spec ->
+                            val rect = buttonBoundsMap[spec.digit]
+                            val ptr = activePointerInWindow
+                            val glowIntensity = computeProximityGlow(ptr, rect)
+                            val localPtr = if (ptr != null && rect != null) {
+                                Offset(ptr.x - rect.left, ptr.y - rect.top)
+                            } else {
+                                null
+                            }
+
                             PinGlassRenderer.LiquidGlassPinButton(
                                 backdrop = sharedBackdrop,
                                 enabled = canAcceptInput,
                                 isGraphicsActive = isGraphicsActive,
                                 config = tunedPinConfig,
-                                keyAngleDegrees = spec.lightAngleDegrees,
-                                contentDescriptionText = "PIN digit ${spec.digit}",
+                                keyAngleOffsetDegrees = spec.lightAngleDegrees,
+                                externalGlowIntensity = glowIntensity,
+                                localPointerGlowOffset = localPtr,
+                                onButtonPositioned = { coords ->
+                                    buttonBoundsMap[spec.digit] = coords.boundsInWindow()
+                                },
+                                contentDescriptionText = "Số ${spec.digit}",
                                 onClick = { onDigitPressed(spec.digit) },
                             ) {
                                 Text(
                                     text = spec.digit.toString(),
                                     color = Color.White,
-                                    fontSize = 34.sp,
+                                    fontSize = 35.sp,
                                     fontWeight = FontWeight.Normal,
                                 )
                                 if (spec.letters.isNotEmpty()) {
                                     Text(
                                         text = spec.letters,
-                                        color = Color.White.copy(alpha = 0.82f),
+                                        color = Color.White.copy(alpha = 0.85f),
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         letterSpacing = 2.2.sp,
@@ -439,27 +332,41 @@ fun LiquidGlassLockScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
+                    val rect0 = buttonBoundsMap['0']
+                    val ptr = activePointerInWindow
+                    val glow0 = computeProximityGlow(ptr, rect0)
+                    val localPtr0 = if (ptr != null && rect0 != null) {
+                        Offset(ptr.x - rect0.left, ptr.y - rect0.top)
+                    } else {
+                        null
+                    }
+
                     PinGlassRenderer.LiquidGlassPinButton(
                         backdrop = sharedBackdrop,
                         enabled = canAcceptInput,
                         isGraphicsActive = isGraphicsActive,
                         config = tunedPinConfig,
-                        keyAngleDegrees = -25f,
-                        contentDescriptionText = "PIN digit 0",
+                        keyAngleOffsetDegrees = -25f,
+                        externalGlowIntensity = glow0,
+                        localPointerGlowOffset = localPtr0,
+                        onButtonPositioned = { coords ->
+                            buttonBoundsMap['0'] = coords.boundsInWindow()
+                        },
+                        contentDescriptionText = "Số 0",
                         onClick = { onDigitPressed('0') },
                     ) {
                         Text(
                             text = "0",
                             color = Color.White,
-                            fontSize = 34.sp,
+                            fontSize = 35.sp,
                             fontWeight = FontWeight.Normal,
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Bottom row: Emergency / Recovery on left, Cancel / Delete on right
+                // Bottom row: Khẩn cấp / Khôi phục on left, Hủy / Xóa on right
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -468,7 +375,7 @@ fun LiquidGlassLockScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Khôi phục",
+                        text = "Khẩn cấp",
                         color = Color.White.copy(alpha = 0.90f),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
@@ -502,7 +409,6 @@ fun LiquidGlassLockScreen(
             }
         }
 
-        // Liquid Glass Recovery Sheet Overlay (Recovery Code or Security Question)
         if (uiState.activeRecoverySheet != ActiveRecoverySheet.NONE) {
             LiquidGlassRecoverySheet(
                 sharedBackdrop = sharedBackdrop,
@@ -518,110 +424,13 @@ fun LiquidGlassLockScreen(
     }
 }
 
-@Composable
-private fun PinGlassRenderer.LiquidGlassPinButton(
-    backdrop: LayerBackdrop?,
-    enabled: Boolean,
-    isGraphicsActive: Boolean,
-    config: PinGlassConfig,
-    keyAngleDegrees: Float,
-    contentDescriptionText: String,
-    onClick: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    LiquidGlassPinButton(
-        backdrop = backdrop,
-        overlayBackdrop = null,
-        enabled = enabled,
-        isGraphicsActive = isGraphicsActive,
-        config = config,
-        keyAngleOffsetDegrees = keyAngleDegrees,
-        contentDescriptionText = contentDescriptionText,
-        onClick = onClick,
-        content = content,
-    )
-}
-
-@Composable
-private fun LockPadlockGlyph(unlocked: Boolean) {
-    val glyphColor = if (unlocked) Color(0xFF7CF7C8) else Color.White.copy(alpha = 0.90f)
-    Canvas(modifier = Modifier.size(22.dp)) {
-        val w = size.width
-        val h = size.height
-        // Shackle arc
-        drawArc(
-            color = glyphColor,
-            startAngle = 180f,
-            sweepAngle = if (unlocked) 130f else 180f,
-            useCenter = false,
-            topLeft = Offset(w * 0.25f, h * 0.08f),
-            size = androidx.compose.ui.geometry.Size(w * 0.50f, h * 0.45f),
-            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
-        )
-        // Padlock body
-        drawRoundRect(
-            color = glyphColor,
-            topLeft = Offset(w * 0.18f, h * 0.42f),
-            size = androidx.compose.ui.geometry.Size(w * 0.64f, h * 0.50f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-        )
-    }
-}
-
-@Composable
-private fun BiometricScannerGlyph(active: Boolean) {
-    val strokeColor = if (active) Color(0xFF72D572) else Color.White.copy(alpha = 0.45f)
-    Canvas(modifier = Modifier.size(24.dp)) {
-        val s = size.minDimension
-        val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
-        // Corner brackets + face/fingerprint arcs
-        drawArc(
-            color = strokeColor,
-            startAngle = 180f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = Offset(s * 0.1f, s * 0.1f),
-            size = androidx.compose.ui.geometry.Size(s * 0.3f, s * 0.3f),
-            style = stroke,
-        )
-        drawArc(
-            color = strokeColor,
-            startAngle = 270f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = Offset(s * 0.6f, s * 0.1f),
-            size = androidx.compose.ui.geometry.Size(s * 0.3f, s * 0.3f),
-            style = stroke,
-        )
-        drawArc(
-            color = strokeColor,
-            startAngle = 90f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = Offset(s * 0.1f, s * 0.6f),
-            size = androidx.compose.ui.geometry.Size(s * 0.3f, s * 0.3f),
-            style = stroke,
-        )
-        drawArc(
-            color = strokeColor,
-            startAngle = 0f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = Offset(s * 0.6f, s * 0.6f),
-            size = androidx.compose.ui.geometry.Size(s * 0.3f, s * 0.3f),
-            style = stroke,
-        )
-        // Smile curve inside scanner
-        drawArc(
-            color = strokeColor,
-            startAngle = 25f,
-            sweepAngle = 130f,
-            useCenter = false,
-            topLeft = Offset(s * 0.32f, s * 0.36f),
-            size = androidx.compose.ui.geometry.Size(s * 0.36f, s * 0.32f),
-            style = stroke,
-        )
-    }
+private fun computeProximityGlow(pointerInWindow: Offset?, buttonRect: Rect?): Float {
+    if (pointerInWindow == null || buttonRect == null) return 0f
+    val center = buttonRect.center
+    val dist = hypot(pointerInWindow.x - center.x, pointerInWindow.y - center.y)
+    val radius = buttonRect.width * 0.85f
+    if (dist >= radius) return 0f
+    return ((1f - dist / radius).coerceIn(0f, 1f))
 }
 
 @Composable
@@ -683,7 +492,7 @@ private fun LiquidGlassRecoverySheet(
                     } else {
                         securityQuestionPrompt ?: "Chưa thiết lập câu hỏi bảo mật."
                     },
-                    color = Color.White.copy(alpha = 0.80f),
+                    color = Color.White.copy(alpha = 0.82f),
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,
                 )
