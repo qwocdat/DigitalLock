@@ -27,7 +27,7 @@ data class DigitalLockSettings(
     val dynamicColorEnabled: Boolean = true,
     val darkThemePreference: Boolean? = null,
     val customWallpaperUri: String? = null,
-    val preventScreenshotsOnLock: Boolean = true,
+    val preventScreenshotsOnLock: Boolean = false,
     val refractionIntensityScale: Float = 1.0f,
     val chromaticAberrationScale: Float = 1.0f,
 )
@@ -102,7 +102,7 @@ class SettingsRepository(context: Context) {
             biometricEnabled = prefs.getBoolean(KEY_BIOMETRIC_ENABLED, false),
             dynamicColorEnabled = prefs.getBoolean(KEY_DYNAMIC_COLOR, true),
             customWallpaperUri = prefs.getString(KEY_CUSTOM_WALLPAPER_URI, null),
-            preventScreenshotsOnLock = prefs.getBoolean(KEY_PREVENT_SCREENSHOTS, true),
+            preventScreenshotsOnLock = prefs.getBoolean(KEY_PREVENT_SCREENSHOTS, false),
             refractionIntensityScale = prefs.getFloat(KEY_REFRACTION_SCALE, 1.0f),
             chromaticAberrationScale = prefs.getFloat(KEY_ABERRATION_SCALE, 1.0f),
         )
