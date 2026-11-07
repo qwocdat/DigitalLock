@@ -3,8 +3,6 @@
 
 package component.liquid
 
-// Adapted from Kyant0/AndroidLiquidGlass — https://github.com/Kyant0/AndroidLiquidGlass (Apache 2.0).
-
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.RenderEffect as AndroidRenderEffect
@@ -257,6 +255,7 @@ class BackdropEffectScope(
     val shape: Shape,
     private val densityImpl: Density,
     val downscaleFactor: Int = 1,
+    private val shaderCache: MutableMap<String, AndroidRuntimeShader>,
 ) : Density by densityImpl {
 
     var padding: Float = 0f
@@ -272,6 +271,10 @@ class BackdropEffectScope(
         } else {
             AndroidRenderEffect.createChainEffect(next, current)
         }
+    }
+
+    internal fun getOrCreateShader(key: String, shaderString: String): AndroidRuntimeShader {
+        return shaderCache.getOrPut(key) { AndroidRuntimeShader(shaderString) }
     }
 }
 
@@ -318,7 +321,8 @@ fun BackdropEffectScope.runtimeShaderEffect(
     block: RuntimeShaderUniformScope.() -> Unit,
 ) {
     if (!isRuntimeShaderSupported()) return
-    val runtimeShader = AndroidRuntimeShader(shaderString)
+    // Reuse cached compiled RuntimeShader per node to eliminate per-frame compilation lag!
+    val runtimeShader = getOrCreateShader(key, shaderString)
     RuntimeShaderUniformScope(runtimeShader).apply(block)
     val effect = AndroidRenderEffect.createRuntimeShaderEffect(
         runtimeShader,
@@ -387,6 +391,7 @@ private class DrawBackdropNode(
     private var effectLayer: GraphicsLayer? = null
     private var currentCoords: LayoutCoordinates? = null
     private val clipPath = Path()
+    private val shaderCache = mutableMapOf<String, AndroidRuntimeShader>()
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
         currentCoords = coordinates
@@ -399,6 +404,7 @@ private class DrawBackdropNode(
     }
 
     override fun onDetach() {
+        shaderCache.clear()
         effectLayer?.let {
             requireGraphicsContext().releaseGraphicsLayer(it)
             effectLayer = null
@@ -422,6 +428,7 @@ private class DrawBackdropNode(
             shape = currentShape,
             densityImpl = this,
             downscaleFactor = 1,
+            shaderCache = shaderCache,
         ).apply(effectsBlock)
 
         val layer = effectLayer
@@ -462,11 +469,11 @@ private class DrawBackdropNode(
         val rimBrush = Brush.linearGradient(
             colors = listOf(
                 style.primaryLight.color.copy(
-                    alpha = (0.65f * style.primaryLight.intensity * highlight.alpha).coerceIn(0f, 1f)
+                    alpha = (0.78f * style.primaryLight.intensity * highlight.alpha).coerceIn(0f, 1f)
                 ),
                 style.color.copy(alpha = (style.color.alpha * highlight.alpha).coerceIn(0f, 1f)),
                 style.secondaryLight.color.copy(
-                    alpha = (0.55f * style.secondaryLight.intensity * highlight.alpha).coerceIn(0f, 1f)
+                    alpha = (0.62f * style.secondaryLight.intensity * highlight.alpha).coerceIn(0f, 1f)
                 ),
             ),
             start = Offset(primaryX, primaryY),
