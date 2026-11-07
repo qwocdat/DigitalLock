@@ -46,12 +46,10 @@ import com.digitallock.lock.LockActivity
 import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
 import com.digitallock.service.MonitorService
+import com.digitallock.ui.setup.openHyperOsAutostartAndPermissions
+import com.digitallock.ui.setup.openScreenLockSettingsDirectly
+import com.digitallock.ui.setup.requestIgnoreBatteryOptimizationsDirectly
 
-/**
- * Material 3 Expressive Dashboard for DigitalLock (UI System A).
- * Displays live security status, Android platform boundary diagnostics, Photo Picker
- * background customization, optical refraction tuning, and system permission shortcuts.
- */
 @Composable
 fun HomeScreen(
     settingsRepository: SettingsRepository,
@@ -100,11 +98,10 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text(
-            text = "DigitalLock Control Center",
+            text = "Trung tâm điều khiển DigitalLock",
             style = MaterialTheme.typography.headlineLarge,
         )
 
-        // Primary Lock Action Card
         ElevatedCard(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.elevatedCardColors(
@@ -123,15 +120,15 @@ fun HomeScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (settings.lockEnabled) "DigitalLock Protection Active" else "DigitalLock Paused",
+                            text = if (settings.lockEnabled) "DigitalLock đang BẬT" else "DigitalLock đang TẠM DỪNG",
                             style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                         Text(
                             text = if (settings.operationMode == LockOperationMode.STANDALONE_SINGLE_LOCK) {
-                                "Mode: Standalone Single-PIN Lock"
+                                "Chế độ: Khóa PIN độc lập (1 lớp khóa)"
                             } else {
-                                "Mode: Coexisting with Android Keyguard"
+                                "Chế độ: Song song với khóa màn hình Android"
                             },
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
@@ -155,12 +152,11 @@ fun HomeScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Launch Liquid Glass PIN Lock Screen Now")
+                    Text("Mở màn hình khóa Liquid Glass PIN ngay")
                 }
             }
         }
 
-        // Honest Android System Capabilities & Permissions Card
         Card(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -170,35 +166,44 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "Android System Integration & Honest Boundaries",
+                    text = "Trạng thái hệ thống & Cấp quyền",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 val keyguardStatusText = if (snapshot.isAndroidDeviceSecure) {
-                    "Yes (Double-lock unless disabled in Android Settings)"
+                    "Đang bật (Hãy tắt trong cài đặt Khóa màn hình để tránh nhập 2 lần PIN)"
                 } else {
-                    "No (Single-PIN mode ready)"
+                    "Đã tắt (Chuẩn chế độ 1 lớp khóa)"
                 }
                 val accessibilityStatusText = if (snapshot.isAccessibilityMonitorEnabled) {
-                    "Enabled (Assists background lock transitions)"
+                    "Đã bật ✓"
                 } else {
-                    "Disabled (Android 10–14+ restricts background Activity starts)"
+                    "Chưa bật (Cần bật để tự mở màn hình khóa khi bật máy)"
                 }
                 val deviceOwnerStatusText = if (snapshot.isDeviceOwnerProvisioned) {
-                    "Provisioned (Hardware Kiosk Lock Active)"
+                    "Đã kích hoạt Device Owner ✓"
                 } else {
-                    "Standard App Mode (Not Device Owner)"
+                    "Chế độ ứng dụng tiêu chuẩn"
                 }
-                val batteryStatusText = if (snapshot.isIgnoringBatteryOptimizations) "Yes" else "No"
+                val batteryStatusText = if (snapshot.isIgnoringBatteryOptimizations) "Đã cho phép ✓" else "Chưa cấp quyền"
                 Text(
                     text = listOf(
-                        "• Android System Keyguard Active: $keyguardStatusText",
-                        "• Accessibility Window Monitor: $accessibilityStatusText",
-                        "• Managed Device Owner (Lock Task Mode): $deviceOwnerStatusText",
-                        "• Battery Optimization Unrestricted: $batteryStatusText",
-                        "• Last Launch Diagnostic: ${lastDiag.status} — ${lastDiag.reasonMessage}",
+                        "• Khóa màn hình hệ thống: $keyguardStatusText",
+                        "• Dịch vụ Trợ năng DigitalLock: $accessibilityStatusText",
+                        "• Không giới hạn tối ưu hóa Pin: $batteryStatusText",
+                        "• Chế độ Quản trị (Device Owner): $deviceOwnerStatusText",
+                        "• Trạng thái gần nhất: ${lastDiag.status}",
                     ).joinToString(separator = "\n"),
                     style = MaterialTheme.typography.bodyLarge,
                 )
+
+                if (snapshot.isAndroidDeviceSecure) {
+                    Button(
+                        onClick = { openScreenLockSettingsDirectly(context) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Mở thẳng cài đặt Tắt Khóa Màn Hình Hệ Thống")
+                    }
+                }
 
                 OutlinedButton(
                     onClick = {
@@ -206,33 +211,32 @@ fun HomeScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Configure AccessibilityMonitor (Optional Consent)")
+                    Text(
+                        if (snapshot.isAccessibilityMonitorEnabled) "Cài đặt Trợ năng (Đã bật ✓)"
+                        else "Bật Dịch vụ Trợ năng DigitalLock"
+                    )
                 }
 
                 if (!snapshot.isIgnoringBatteryOptimizations) {
                     OutlinedButton(
-                        onClick = {
-                            context.startActivity(
-                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                            )
-                        },
+                        onClick = { requestIgnoreBatteryOptimizationsDirectly(context) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Open Battery Optimization Settings")
+                        Text("Cho phép chạy nền không giới hạn Pin")
                     }
                 }
 
                 if (snapshot.isHyperOsOrMiui) {
-                    Text(
-                        text = "Xiaomi HyperOS / MIUI Detected: Enable 'Autostart' and set Battery Saver to 'No restrictions' in App Info so MonitorService is not killed when the screen turns off.",
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontWeight = FontWeight.Medium,
-                    )
+                    OutlinedButton(
+                        onClick = { openHyperOsAutostartAndPermissions(context) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Mở quyền Tự khởi chạy & Hiển thị trên màn hình khóa (HyperOS)")
+                    }
                 }
             }
         }
 
-        // Liquid Glass Background & Optical Tuning Card
         Card(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -249,14 +253,14 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "Liquid Glass Backdrop & Lens Calibration",
+                    text = "Hình nền & Tinh chỉnh thấu kính Liquid Glass",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
                     text = if (settings.customWallpaperUri != null) {
-                        "Active Backdrop: User Selected Photo Picker Texture"
+                        "Nguồn nền: Ảnh tùy chỉnh từ thư viện của bạn"
                     } else {
-                        "Active Backdrop: High-Depth Procedural iOS 27 Blue-Teal Waves"
+                        "Nguồn nền: Nền sóng Liquid Glass chiều sâu mặc định"
                     },
                 )
 
@@ -269,19 +273,19 @@ fun HomeScreen(
                         },
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Pick Photo Backdrop")
+                        Text("Chọn ảnh nền khóa")
                     }
                     if (settings.customWallpaperUri != null) {
                         OutlinedButton(
                             onClick = { settingsRepository.setCustomWallpaperUri(null) },
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text("Reset to Procedural")
+                            Text("Về nền mặc định")
                         }
                     }
                 }
 
-                Text("Lens Refraction Scale: ${(refScale * 100).toInt()}%")
+                Text("Cường độ khúc xạ ánh sáng: ${(refScale * 100).toInt()}%")
                 Slider(
                     value = refScale,
                     onValueChange = {
@@ -291,7 +295,7 @@ fun HomeScreen(
                     valueRange = 0.6f..1.4f,
                 )
 
-                Text("Rim Chromatic Dispersion Scale: ${(chrScale * 100).toInt()}%")
+                Text("Độ tán sắc viền kính (Chromatic Dispersion): ${(chrScale * 100).toInt()}%")
                 Slider(
                     value = chrScale,
                     onValueChange = {
@@ -303,7 +307,6 @@ fun HomeScreen(
             }
         }
 
-        // Credentials & Recovery Status Card
         Card(
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -313,22 +316,22 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "Credential & Recovery Status",
+                    text = "Quản lý mã PIN & Khôi phục",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
                     text = listOf(
-                        "• Primary PIN Configured: ${pinManager.isPrimaryPinConfigured()} (${pinManager.getExpectedPinLength()} chars)",
-                        "• Secondary Fallback PIN: ${pinManager.isSecondaryPinConfigured()}",
-                        "• Salted Recovery Code Hash: ${recoveryManager.hasRecoveryCode()}",
-                        "• Salted Security Question: ${recoveryManager.hasSecurityQuestion()}",
+                        "• Mã PIN chính: Đã thiết lập (${pinManager.getExpectedPinLength()} ký tự)",
+                        "• Mã PIN phụ: ${if (pinManager.isSecondaryPinConfigured()) "Đã thiết lập ✓" else "Chưa thiết lập"}",
+                        "• Mã khôi phục 1 lần: ${if (recoveryManager.hasRecoveryCode()) "Đã lưu bản băm ✓" else "Chưa tạo"}",
+                        "• Câu hỏi bảo mật: ${if (recoveryManager.hasSecurityQuestion()) "Đã thiết lập ✓" else "Chưa thiết lập"}",
                     ).joinToString(separator = "\n"),
                 )
                 OutlinedButton(
                     onClick = onReopenSetupWizard,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Re-run Setup Wizard / Rotate PIN & Recovery Credentials")
+                    Text("Mở lại Trình thiết lập PIN & Khôi phục")
                 }
             }
         }
