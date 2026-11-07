@@ -11,12 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * Inspects real Android system security state (`KeyguardManager`, `DevicePolicyManager`,
- * `PowerManager` battery optimization exemptions, `AccessibilityService` state) and records
- * honest diagnostics whenever Android 10–14+ background activity start restrictions prevent
- * `LockActivity` from auto-launching.
- */
 class LockRepository(private val context: Context) {
 
     private val dpContext = context.applicationContext.createDeviceProtectedStorageContext()
@@ -32,19 +26,11 @@ class LockRepository(private val context: Context) {
         val isDeviceOwnerProvisioned: Boolean,
         val isLockTaskPermitted: Boolean,
         val isAccessibilityMonitorEnabled: Boolean,
+        val canDrawOverlays: Boolean,
         val isIgnoringBatteryOptimizations: Boolean,
         val isHyperOsOrMiui: Boolean,
     )
 
-    /**
-     * Queries `KeyguardManager` and `DevicePolicyManager` for real system lock state.
-     *
-     * Note on Android platform semantics: `KeyguardManager.isDeviceSecure` returns `true`
-     * whenever the user has configured a secure system lock screen (PIN, Pattern, or Password),
-     * and `false` when the system lock is set to None or Swipe. Android intentionally does not
-     * expose which specific credential subtype (PIN vs. Password vs. Pattern) is active to
-     * non-system apps.
-     */
     fun querySystemSecuritySnapshot(): SystemSecuritySnapshot {
         val km = context.getSystemService(KeyguardManager::class.java)
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
@@ -60,7 +46,8 @@ class LockRepository(private val context: Context) {
             isKeyguardLockedNow = km?.isKeyguardLocked == true,
             isDeviceOwnerProvisioned = isDeviceOwner,
             isLockTaskPermitted = isLockTaskAllowed,
-            isAccessibilityMonitorEnabled = isAccessibilityServiceEnabled(),
+            isAccessibilityMonitorEnabled = AccessibilityMonitor.instance != null || isAccessibilityServiceEnabled(),
+            canDrawOverlays = Settings.canDrawOverlays(context),
             isIgnoringBatteryOptimizations = pm?.isIgnoringBatteryOptimizations(pkg) == true,
             isHyperOsOrMiui = isXiaomiHyperOsOrMiui(),
         )
@@ -84,7 +71,7 @@ class LockRepository(private val context: Context) {
         }
         val reason = prefs.getString(
             KEY_LAST_REASON,
-            "No background lock launch failures recorded.",
+            "Sẵn sàng bảo vệ màn hình khóa.",
         ) ?: ""
         val ts = prefs.getLong(KEY_LAST_TIMESTAMP, 0L)
         return LockLaunchDiagnostic(status = status, reasonMessage = reason, timestampEpochMs = ts)
