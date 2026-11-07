@@ -25,16 +25,27 @@ class LockController(
 
         SessionManager.lockSession()
 
+        // If AccessibilityMonitor is active, attach the un-dismissible TYPE_ACCESSIBILITY_OVERLAY
+        // lock surface directly so Home/Recents swipe gestures are 100% blocked!
+        val a11y = AccessibilityMonitor.instance
+        if (a11y != null) {
+            a11y.showUnDismissibleLockSurface()
+            lockRepository.recordLaunchDiagnostic(
+                LockLaunchDiagnostic(
+                    status = LockLaunchDiagnostic.Status.LAUNCHED_SUCCESSFULLY,
+                    reasonMessage = "Đã khóa toàn màn hình chống thoát ($triggerSource).",
+                    timestampEpochMs = System.currentTimeMillis(),
+                )
+            )
+            return true
+        }
+
         if (SessionManager.isLockActivityVisible.value) {
             return true
         }
 
-        // Prefer launching from AccessibilityMonitor service instance if connected,
-        // as AccessibilityService has direct OS exemption to start Activities from background.
-        val launchContext: Context = AccessibilityMonitor.instance ?: context
-
         return try {
-            val intent = Intent(launchContext, LockActivity::class.java).apply {
+            val intent = Intent(context, LockActivity::class.java).apply {
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -55,11 +66,11 @@ class LockController(
                 null
             }
 
-            launchContext.startActivity(intent, options)
+            context.startActivity(intent, options)
             lockRepository.recordLaunchDiagnostic(
                 LockLaunchDiagnostic(
                     status = LockLaunchDiagnostic.Status.LAUNCHED_SUCCESSFULLY,
-                    reasonMessage = "Đã kích hoạt màn hình khóa ($triggerSource).",
+                    reasonMessage = "Đã mở màn hình khóa ($triggerSource).",
                     timestampEpochMs = System.currentTimeMillis(),
                 )
             )
@@ -68,7 +79,7 @@ class LockController(
             lockRepository.recordLaunchDiagnostic(
                 LockLaunchDiagnostic(
                     status = LockLaunchDiagnostic.Status.BLOCKED_BY_BACKGROUND_RESTRICTIONS,
-                    reasonMessage = "Cần cấp quyền Hiển thị trên ứng dụng khác & Trợ năng để tự mở khóa ($triggerSource).",
+                    reasonMessage = "Hãy bật Dịch vụ Trợ năng DigitalLock để chặn thoát ứng dụng ($triggerSource).",
                     timestampEpochMs = System.currentTimeMillis(),
                 )
             )
