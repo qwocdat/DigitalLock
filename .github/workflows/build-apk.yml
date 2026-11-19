@@ -1,4 +1,4 @@
-name: Build DigitalLock Liquid Glass APK
+name: Build DigitalLock Multi-Language APK
 
 on:
   push:
@@ -7,6 +7,9 @@ on:
     branches: [ "*" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -14,23 +17,118 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up JDK 17
+      - name: Auto-extract uploaded patch ZIPs safely (protecting .github/workflows/)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          shopt -s nullglob
+          ZIPS=( *.zip patches/*.zip )
+          if [ ${#ZIPS[@]} -gt 0 ]; then
+            for z in "${ZIPS[@]}"; do
+              echo "Verifying and extracting $z..."
+              python3 scripts/zip_extract_verify.py "$z" --repo . --apply
+              rm -f "$z"
+            done
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            if [ -n "$(git status --porcelain)" ]; then
+              python3 scripts/github_auto_commit.py --repo . --message "chore(ci): auto-extract verified source ZIP" --push
+            fi
+          else
+            echo "No patch ZIPs found; proceeding with repository source."
+          fi
+
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
+
+      - name: Install Android NDK 27 & CMake 3.22.1 via sdkmanager
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.0.12077973" \
+            "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Set up Rust toolchain (aarch64-linux-android) & cargo-ndk
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Cargo & Rust artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            rust_security/target/
+          key: ${{ runner.os }}-cargo-ndk-${{ hashFiles('rust_security/Cargo.toml') }}
+
+      - name: Run Rust Security Engine unit tests & build arm64-v8a .so
+        run: |
+          cd rust_security
+          cargo test
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
+          mkdir -p ../app/src/main/jniLibs/arm64-v8a
+          cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
+          ls -lh ../app/src/main/jniLibs/arm64-v8a/libdigitallock_security.so
 
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Compile Debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Decode Release Keystore (if configured in GitHub Secrets)
+        if: ${{ secrets.DIGITALLOCK_KEYSTORE_B64 != '' }}
+        run: |
+          echo "${{ secrets.DIGITALLOCK_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "DIGITALLOCK_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
-      - name: Upload Compiled DigitalLock APK
+      - name: Run Kotlin Unit Tests
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Build Debug & Release APKs (arm64-v8a, R8 obfuscated)
+        env:
+          DIGITALLOCK_KEYSTORE_PASSWORD: ${{ secrets.DIGITALLOCK_KEYSTORE_PASSWORD }}
+          DIGITALLOCK_KEY_ALIAS: ${{ secrets.DIGITALLOCK_KEY_ALIAS }}
+          DIGITALLOCK_KEY_PASSWORD: ${{ secrets.DIGITALLOCK_KEY_PASSWORD }}
+          DIGITALLOCK_MANIFEST_PUBKEY_B64: ${{ secrets.DIGITALLOCK_MANIFEST_PUBKEY_B64 }}
+          DIGITALLOCK_LICENSE_PUBKEY_B64: ${{ secrets.DIGITALLOCK_LICENSE_PUBKEY_B64 }}
+          DIGITALLOCK_SIGNING_CERT_SHA256: ${{ secrets.DIGITALLOCK_SIGNING_CERT_SHA256 }}
+        run: |
+          gradle assembleDebug assembleRelease -x lint --no-daemon --stacktrace
+          ls -lh app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk
+
+      - name: Verify APK Signatures & Native Libraries
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          for apk in app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk; do
+            echo "Verifying $apk..."
+            "$APKSIGNER" verify --print-certs "$apk"
+            unzip -l "$apk" | grep -E "libdigitallock_(glass|security)\.so"
+          done
+
+      - name: Upload DigitalLock APKs
         uses: actions/upload-artifact@v4
         with:
-          name: DigitalLock-LiquidGlass-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: DigitalLock-APKs-arm64
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+
+      - name: Upload Private R8 Mapping File
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DigitalLock-R8-Mapping-Private
+          path: app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: ignore
