@@ -39,6 +39,7 @@ import com.digitallock.security.AuthenticationManager
 import com.digitallock.security.CredentialStore
 import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
+import com.digitallock.security.SafeRecoveryGuard
 import com.digitallock.ui.lock.LiquidGlassLockScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,6 +88,7 @@ class AccessibilityMonitor : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        SessionManager.init(this)
         serviceInfo = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOWS_CHANGED
@@ -128,6 +130,14 @@ class AccessibilityMonitor : AccessibilityService() {
         if (!settings.setupCompleted || !settings.lockEnabled) return
 
         // Do NOT show the PIN screen while the user is still on the system lockscreen (10:28 clock)!
+        val pkgName = event?.packageName?.toString()?.lowercase().orEmpty()
+        if (isSystemUrgentPackage(pkgName)) {
+            if (isLockOverlayAttached()) {
+                temporarilyHideOverlayForUrgentSystemWindow()
+            }
+            return
+        }
+
         val km = getSystemService(KeyguardManager::class.java)
         if (km?.isKeyguardLocked == true) {
             return
@@ -331,6 +341,7 @@ class AccessibilityMonitor : AccessibilityService() {
                     syncOverlayLockoutCountdown(authManager)
                 }
             } catch (_: Throwable) {
+                SafeRecoveryGuard.recordLockSurfaceFailure(this)
                 owner.onDestroy()
                 overlayLifecycleOwner = null
             }
@@ -438,7 +449,8 @@ class AccessibilityMonitor : AccessibilityService() {
                 )
             }
             delay(160L)
-            SessionManager.unlockSession()
+            SafeRecoveryGuard.clearSafeRecoveryOnUnlock(this)
+        SessionManager.unlockSession()
             SessionManager.onLockActivityVisibilityChanged(false)
             removeLockOverlayViewImmediate()
         }
@@ -504,6 +516,33 @@ class AccessibilityMonitor : AccessibilityService() {
             } catch (_: IllegalArgumentException) {
             }
             screenReceiver = null
+        }
+    }
+
+    private fun isSystemUrgentPackage(pkg: String): Boolean {
+        if (pkg.isEmpty()) return false
+        return pkg == "com.android.incallui" ||
+            pkg == "com.google.android.dialer" ||
+            pkg == "com.android.dialer" ||
+            pkg == "com.android.server.telecom" ||
+            pkg == "com.android.phone" ||
+            pkg == "com.android.emergency" ||
+            pkg == "com.android.deskclock" ||
+            pkg == "com.google.android.deskclock" ||
+            pkg == "com.miui.clock"
+    }
+
+    private fun temporarilyHideOverlayForUrgentSystemWindow() {
+        mainHandler.post {
+            val view = lockOverlayView ?: return@post
+            try {
+                getSystemService(WindowManager::class.java)?.removeViewImmediate(view)
+            } catch (_: Throwable) {
+            }
+            lockOverlayView = null
+            overlayLifecycleOwner?.onDestroy()
+            overlayLifecycleOwner = null
+            SessionManager.onLockActivityVisibilityChanged(false)
         }
     }
 

@@ -9,6 +9,14 @@ struct GlassEngineContext {
     float densityScale;
     uint32_t glProgramId;
     bool initialized;
+    bool contextLost;
+};
+
+struct SanitizedGlassParams {
+    float refractionScale;
+    float aberrationScale;
+    float fresnelStrength;
+    float blurRadiusDp;
 };
 
 /**
@@ -25,6 +33,45 @@ float computeRefractionDisplacement(
     float signedDistancePx,
     float refractionHeightPx,
     float refractionAmountPx
+) noexcept;
+
+/**
+ * Evaluates Schlick's Fresnel reflectance approximation for Liquid Glass rim highlights.
+ */
+float evaluateFresnelSchlick(float cosTheta, float f0) noexcept;
+
+/**
+ * Computes 3-channel (R, G, B) radial dispersion offsets in pixels with zero heap allocation.
+ */
+void computeChromaticDispersionOffsets(
+    float signedDistancePx,
+    float refractionHeightPx,
+    float refractionAmountPx,
+    float chromaticAberration,
+    float outRgbOffsets[3]
+) noexcept;
+
+/**
+ * Advances a critically/under-damped spring-damper system by `dtSeconds` with zero allocation.
+ */
+void stepSpringDamper(
+    float position,
+    float velocity,
+    float target,
+    float stiffness,
+    float damping,
+    float dtSeconds,
+    float outPosVel[2]
+) noexcept;
+
+/**
+ * Clamps and sanitizes untrusted remote shader parameters to safe GPU bounds.
+ */
+SanitizedGlassParams sanitizeGlassParams(
+    float refractionScale,
+    float aberrationScale,
+    float fresnelStrength,
+    float blurRadiusDp
 ) noexcept;
 
 const char* getPinLensGlslSource() noexcept;

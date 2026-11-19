@@ -21,6 +21,7 @@ import com.digitallock.security.AuthenticationManager
 import com.digitallock.security.CredentialStore
 import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
+import com.digitallock.security.SafeRecoveryGuard
 import com.digitallock.ui.lock.LiquidGlassLockScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +52,7 @@ class LockActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SessionManager.init(this)
 
         credentialStore = CredentialStore(this)
         pinManager = PinManager(credentialStore)
@@ -310,6 +312,7 @@ class LockActivity : FragmentActivity() {
             )
         }
         delay(150L)
+        SafeRecoveryGuard.clearSafeRecoveryOnUnlock(this)
         SessionManager.unlockSession()
         AccessibilityMonitor.instance?.dismissLockSurfaceOnSuccess()
         if (isLockTaskActive) {

@@ -55,7 +55,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.digitallock.cache.LastKnownGoodCacheManager
 import com.digitallock.data.DigitalLockSettings
+import com.digitallock.graphics.NativeGlassBridge
+import com.digitallock.remote.RemoteUiConfig
+import com.digitallock.security.SafeRecoveryGuard
 import com.digitallock.graphics.LockBackgroundRenderer
 import com.digitallock.graphics.PinGlassConfig
 import com.digitallock.graphics.PinGlassRenderer
@@ -158,11 +163,27 @@ fun LiquidGlassLockScreen(
         }
     }
 
-    val tunedPinConfig = remember(settings.refractionIntensityScale, settings.chromaticAberrationScale) {
-        val rScale = settings.refractionIntensityScale.coerceIn(0.5f, 1.5f)
-        val cScale = settings.chromaticAberrationScale.coerceIn(0.0f, 1.5f)
+    val localContext = LocalContext.current
+    val lkgCache = remember(localContext) { LastKnownGoodCacheManager.getInstance(localContext) }
+    val remoteUiState by lkgCache.activeUiConfig.collectAsState()
+    val safeMode = remember(localContext) { SafeRecoveryGuard.isSafeRecoveryMode(localContext) }
+    val effectiveRemoteUi = if (safeMode) RemoteUiConfig.BuiltInSafeDefault else remoteUiState
+
+    val tunedPinConfig = remember(
+        settings.refractionIntensityScale,
+        settings.chromaticAberrationScale,
+        effectiveRemoteUi,
+    ) {
+        val sanitized = NativeGlassBridge.sanitizeParamsSafely(
+            refractionScale = settings.refractionIntensityScale * effectiveRemoteUi.pinScreen.refractionScale,
+            aberrationScale = settings.chromaticAberrationScale * effectiveRemoteUi.pinScreen.chromaticAberrationScale,
+            fresnelStrength = effectiveRemoteUi.pinScreen.fresnelStrength,
+            blurRadiusDp = 0.6f,
+        )
+        val rScale = sanitized[0]
+        val cScale = sanitized[1]
         PinGlassConfig(
-            buttonSize = 82.dp,
+            buttonSize = effectiveRemoteUi.pinScreen.keySizeDp.dp,
             restingRefractionHeight = (24f * rScale).dp,
             pressedRefractionHeight = (32f * rScale).dp,
             restingRefractionAmount = (28f * rScale).dp,
@@ -170,6 +191,7 @@ fun LiquidGlassLockScreen(
             depthEffect = true,
             restingChromaticAberration = 0.16f * cScale,
             pressedChromaticAberration = 0.24f * cScale,
+            restingHighlightAlpha = effectiveRemoteUi.pinScreen.highlightAlpha,
         )
     }
 

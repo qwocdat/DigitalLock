@@ -11,8 +11,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /**
  * JNI bridge to the C++20 / OpenGL ES 3.0 native refraction module (`libdigitallock_glass.so`).
- * Used for native lens profile verification, OpenGL ES 3.0 shader compilation checks, and
- * deterministic native resource teardown when [LockActivity] is destroyed.
+ * Used for native lens profile verification, Fresnel/dispersion math, safe parameter sanitization,
+ * and deterministic native resource teardown (including EGL context loss recovery).
  */
 object NativeGlassBridge {
     private var nativeLibraryLoaded = false
@@ -35,14 +35,48 @@ object NativeGlassBridge {
         refractionHeightPx: Float,
         refractionAmountPx: Float,
     ): Float
+    external fun nativeEvaluateFresnel(cosTheta: Float, f0: Float): Float
+    external fun nativeSanitizeGlassParams(
+        refractionScale: Float,
+        aberrationScale: Float,
+        fresnelStrength: Float,
+        blurRadiusDp: Float,
+    ): FloatArray?
+    external fun nativeOnContextLost(handle: Long)
     external fun nativeGetGlslFragmentShader(): String
     external fun nativeReleaseEngine(handle: Long)
+
+    fun sanitizeParamsSafely(
+        refractionScale: Float,
+        aberrationScale: Float,
+        fresnelStrength: Float,
+        blurRadiusDp: Float,
+    ): FloatArray {
+        if (nativeLibraryLoaded) {
+            try {
+                nativeSanitizeGlassParams(
+                    refractionScale,
+                    aberrationScale,
+                    fresnelStrength,
+                    blurRadiusDp,
+                )?.let { if (it.size == 4) return it }
+            } catch (_: Throwable) {
+            }
+        }
+        return floatArrayOf(
+            refractionScale.coerceIn(0.5f, 1.5f),
+            aberrationScale.coerceIn(0.0f, 1.5f),
+            fresnelStrength.coerceIn(0.0f, 1.0f),
+            blurRadiusDp.coerceIn(0.0f, 4.0f),
+        )
+    }
 }
 
 /**
  * Manages the lifecycle of the Liquid Glass rendering pipeline so that:
  * 1. Shader/backdrop passes are paused immediately when the lock screen is not visible (`ON_STOP`).
- * 2. Native GPU/JNI handles are deterministically freed in `ON_DESTROY` with zero memory leaks.
+ * 2. EGL context loss is handled without crashing (`onContextLost()`).
+ * 3. Native GPU/JNI handles are deterministically freed in `ON_DESTROY` with zero memory leaks.
  */
 class GlassEffectController(densityScale: Float) {
     private var nativeHandle: Long = if (NativeGlassBridge.isAvailable) {
@@ -59,8 +93,13 @@ class GlassEffectController(densityScale: Float) {
     }
 
     fun onStop() {
-        // Pause expensive backdrop/shader frame loops while the window is stopped/invisible
         _isRenderingActive.value = false
+    }
+
+    fun onContextLost() {
+        if (nativeHandle != 0L && NativeGlassBridge.isAvailable) {
+            NativeGlassBridge.nativeOnContextLost(nativeHandle)
+        }
     }
 
     fun onDestroy() {
