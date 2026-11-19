@@ -17,17 +17,16 @@ data class InjectSoPayload(
 
 /**
  * Parses and validates the downloaded ELF64 AArch64 `inject.so` binary from the PHP Backend
- * and extracts the embedded `DLINJ001` configuration record safely in memory.
+ * and extracts the embedded 32-byte `DLINJ001` configuration record safely in memory.
  */
 object InjectSoLoader {
 
     private val ELF_MAGIC = byteArrayOf(0x7F, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte())
     private val RECORD_MAGIC = "DLINJ001".toByteArray(Charsets.US_ASCII)
-    private const val RECORD_SIZE = 28
+    private const val RECORD_SIZE = 32
 
     fun parseAndValidate(soBytes: ByteArray): InjectSoPayload? {
         if (soBytes.size < 64 + RECORD_SIZE) return null
-        // Verify ELF64 little-endian AArch64 (e_machine == 183 / 0xB7)
         for (i in 0 until 4) {
             if (soBytes[i] != ELF_MAGIC[i]) return null
         }

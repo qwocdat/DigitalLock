@@ -227,7 +227,7 @@ class ServerSyncRepository(
             val minAppVersion = JSONObject(manifestRaw).optInt("min_app_version_code", 1)
             if (BuildConfig.VERSION_CODE < minAppVersion) return SyncOutcome.DATA_VERIFICATION_FAILED
 
-            emitProgress(55, "Đang tải giao diện...", SyncStatus.RUNNING)
+            emitProgress(55, "Đang tải dữ liệu lõi...", SyncStatus.RUNNING)
 
             // 4. Download, SHA-256 verify, and AES-GCM encrypt every frontend asset into staging
             val resources = parsedManifest.resources
@@ -261,7 +261,7 @@ class ServerSyncRepository(
                     cacheManager.writeStagingFile(res.path, bytes)
                 }
                 val pct = 55 + (((idx + 1) * 30) / totalRes)
-                emitProgress(pct.coerceAtMost(85), "Đang tải giao diện...", SyncStatus.RUNNING)
+                emitProgress(pct.coerceAtMost(85), "Đang tải dữ liệu lõi...", SyncStatus.RUNNING)
             }
 
             emitProgress(90, "Đang chuẩn bị màn hình khóa...", SyncStatus.RUNNING)
