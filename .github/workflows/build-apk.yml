@@ -88,10 +88,15 @@ jobs:
           gradle-version: '8.9'
 
       - name: Decode Release Keystore (if configured in GitHub Secrets)
-        if: ${{ secrets.DIGITALLOCK_KEYSTORE_B64 != '' }}
+        env:
+          DIGITALLOCK_KEYSTORE_B64: ${{ secrets.DIGITALLOCK_KEYSTORE_B64 }}
         run: |
-          echo "${{ secrets.DIGITALLOCK_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
-          echo "DIGITALLOCK_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          if [ -n "$DIGITALLOCK_KEYSTORE_B64" ]; then
+            echo "$DIGITALLOCK_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "DIGITALLOCK_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          else
+            echo "DIGITALLOCK_KEYSTORE_B64 not configured; release APK will use debug signing fallback."
+          fi
 
       - name: Run Kotlin Unit Tests
         run: gradle testDebugUnitTest --no-daemon --stacktrace
