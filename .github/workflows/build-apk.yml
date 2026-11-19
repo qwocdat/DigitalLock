@@ -144,6 +144,20 @@ jobs:
             echo "DIGITALLOCK_KEYSTORE_B64 not configured; release APK will use debug signing fallback."
           fi
 
+      - name: Compile standalone inject.so (kept outside APK for Backend hosting)
+        run: |
+          mkdir -p build_inject
+          CLANG="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++"
+          "$CLANG" -shared -std=c++20 -O2 -fPIC -Wall native/inject_src/inject_payload.cpp -o build_inject/inject.so
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded build_inject/inject.so
+          ls -lh build_inject/inject.so
+
+      - name: Upload standalone inject.so (upload to cPanel Admin)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DigitalLock-inject-so
+          path: build_inject/inject.so
+
       - name: Run Kotlin Unit Tests
         run: gradle testDebugUnitTest --no-daemon --stacktrace
 
