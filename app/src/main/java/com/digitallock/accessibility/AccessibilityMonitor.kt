@@ -449,8 +449,8 @@ class AccessibilityMonitor : AccessibilityService() {
                 )
             }
             delay(160L)
-            SafeRecoveryGuard.clearSafeRecoveryOnUnlock(this)
-        SessionManager.unlockSession()
+            SafeRecoveryGuard.clearSafeRecoveryOnUnlock(this@AccessibilityMonitor)
+            SessionManager.unlockSession()
             SessionManager.onLockActivityVisibilityChanged(false)
             removeLockOverlayViewImmediate()
         }
