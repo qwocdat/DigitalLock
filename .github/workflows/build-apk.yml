@@ -20,21 +20,67 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Auto-extract uploaded patch ZIPs safely (protecting .github/workflows/)
+      - name: Auto-extract uploaded patch ZIPs safely (self-contained, protecting .github/workflows/)
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           shopt -s nullglob
           ZIPS=( *.zip patches/*.zip )
           if [ ${#ZIPS[@]} -gt 0 ]; then
             for z in "${ZIPS[@]}"; do
-              echo "Verifying and extracting $z..."
-              python3 scripts/zip_extract_verify.py "$z" --repo . --apply
+              echo "Verifying and safely extracting $z..."
+              if [ -f "scripts/zip_extract_verify.py" ]; then
+                python3 scripts/zip_extract_verify.py "$z" --repo . --apply
+              else
+                python3 - "$z" <<'PYEOF'
+          import os, shutil, sys, tempfile, zipfile
+          from pathlib import Path
+
+          zip_path = Path(sys.argv[1])
+          repo_root = Path(".").resolve()
+          MAX_BYTES = 150 * 1024 * 1024
+
+          with tempfile.TemporaryDirectory(prefix="dl_stage_") as tmp:
+              stage = Path(tmp).resolve()
+              with zipfile.ZipFile(zip_path, "r") as zf:
+                  total = 0
+                  for info in zf.infolist():
+                      if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                          raise RuntimeError(f"Symlink forbidden: {info.filename}")
+                      norm = os.path.normpath(info.filename)
+                      if os.path.isabs(info.filename) or norm.startswith("..") or ".." in Path(info.filename).parts:
+                          raise RuntimeError(f"ZIP Slip detected: {info.filename}")
+                      total += info.file_size
+                      if total > MAX_BYTES:
+                          raise RuntimeError("ZIP size limit exceeded")
+                  zf.extractall(stage)
+              entries = [p for p in stage.iterdir() if p.name != "__MACOSX"]
+              src_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else stage
+              copied = 0
+              for f in src_root.rglob("*"):
+                  if not f.is_file():
+                      continue
+                  rel = f.relative_to(src_root).as_posix()
+                  if rel.startswith(".git/") or rel.startswith(".github/workflows/"):
+                      continue
+                  dst = repo_root / rel
+                  dst.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(f, dst)
+                  copied += 1
+              print(f"Safely extracted {copied} files from {zip_path.name}")
+          PYEOF
+              fi
               rm -f "$z"
             done
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             if [ -n "$(git status --porcelain)" ]; then
-              python3 scripts/github_auto_commit.py --repo . --message "chore(ci): auto-extract verified source ZIP" --push
+              if [ -f "scripts/github_auto_commit.py" ]; then
+                python3 scripts/github_auto_commit.py --repo . --message "chore(ci): auto-extract verified source ZIP" --push
+              else
+                git add -A
+                git commit -m "chore(ci): auto-extract verified source ZIP"
+                git push
+              fi
             fi
           else
             echo "No patch ZIPs found; proceeding with repository source."
