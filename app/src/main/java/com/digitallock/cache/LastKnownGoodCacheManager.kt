@@ -2,6 +2,8 @@ package com.digitallock.cache
 
 import android.content.Context
 import com.digitallock.remote.RemoteUiConfig
+import com.digitallock.runtime.InjectSoLoader
+import com.digitallock.runtime.InjectSoPayload
 import com.digitallock.security.NativeSecurityBridge
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -277,6 +279,11 @@ class LastKnownGoodCacheManager(context: Context) {
                 RemoteUiConfig.BuiltInSafeDefault
             }
         }
+    }
+
+    fun loadVerifiedInjectSoPayload(): InjectSoPayload? {
+        val bytes = readVerifiedDecryptedAsset("inject.so") ?: return null
+        return InjectSoLoader.parseAndValidate(bytes)
     }
 
     fun appendSafeLog(message: String) {

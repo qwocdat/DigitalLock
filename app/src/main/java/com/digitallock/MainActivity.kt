@@ -4,43 +4,47 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import com.digitallock.cache.LastKnownGoodCacheManager
 import com.digitallock.data.LockRepository
 import com.digitallock.data.SettingsRepository
 import com.digitallock.lock.SessionManager
 import com.digitallock.remote.ResourceSyncWorker
 import com.digitallock.remote.ServerSyncRepository
-import com.digitallock.runtime.DigitalLockNativeBridge
-import com.digitallock.runtime.SecureWebViewRuntime
+import com.digitallock.security.AuthenticationManager
 import com.digitallock.security.CredentialStore
 import com.digitallock.security.IntegrityCoordinator
 import com.digitallock.security.PinManager
 import com.digitallock.security.RecoveryManager
 import com.digitallock.security.ServerLicenseManager
 import com.digitallock.service.MonitorService
+import com.digitallock.ui.components.DigitalLockExpressiveTheme
+import com.digitallock.ui.home.HomeScreen
 import com.digitallock.ui.launch.AppLaunchScreen
+import com.digitallock.ui.setup.SetupWizardScreen
 
 /**
- * Minimal Android Bootstrap Activity for DigitalLock v3.0 Backend-Hosted Architecture.
+ * Main Material 3 Expressive entry point for DigitalLock.
  *
- * - Runs [AppLaunchScreen] (Server License Gate + Signed UI Bundle Sync + Real-Time 0–100% progress).
- * - Renders the verified, AES-GCM decrypted Backend-Hosted HTML/CSS/JS Frontend inside [SecureWebViewRuntime].
- * - APK does NOT embed a duplicate offline substitute UI; native runtime strictly provides Android adapters,
- *   hardware-backed PIN storage, LockActivity/AccessibilityMonitor, C++ Liquid Glass, and Rust verification.
+ * - Enforces [AppLaunchScreen] on launch to verify License & load `inject.so` from the PHP Backend
+ *   (or encrypted Last Known Good cache when offline after initial activation).
+ * - Restores the original native Material 3 Expressive [SetupWizardScreen] & [HomeScreen] UI
+ *   once `inject.so` is verified and loaded.
  */
 class MainActivity : ComponentActivity() {
 
     private lateinit var credentialStore: CredentialStore
     private lateinit var pinManager: PinManager
     private lateinit var recoveryManager: RecoveryManager
+    private lateinit var authManager: AuthenticationManager
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var lockRepository: LockRepository
     private lateinit var cacheManager: LastKnownGoodCacheManager
@@ -55,6 +59,7 @@ class MainActivity : ComponentActivity() {
         credentialStore = CredentialStore(this)
         pinManager = PinManager(credentialStore)
         recoveryManager = RecoveryManager(credentialStore)
+        authManager = AuthenticationManager(this, credentialStore, pinManager, recoveryManager)
         settingsRepository = SettingsRepository(this)
         lockRepository = LockRepository(this)
         cacheManager = LastKnownGoodCacheManager.getInstance(this)
@@ -73,45 +78,55 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
+            val settings by settingsRepository.settingsFlow.collectAsState()
             var launchCompleted by rememberSaveable { mutableStateOf(false) }
-            var syncGeneration by rememberSaveable { mutableIntStateOf(0) }
+            var forceWizard by remember { mutableStateOf(false) }
 
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = Color(0xFF080B12),
+            DigitalLockExpressiveTheme(
+                dynamicColor = settings.dynamicColorEnabled,
+                darkThemeOverride = settings.darkThemePreference,
             ) {
-                if (!launchCompleted) {
-                    AppLaunchScreen(
-                        syncRepository = syncRepository,
-                        onReadyToProceed = {
-                            launchCompleted = true
-                            ResourceSyncWorker.schedulePeriodicSync(this@MainActivity)
-                            MonitorService.startIfEnabled(this@MainActivity)
-                        },
-                    )
-                } else {
-                    SecureWebViewRuntime(
-                        cacheManager = cacheManager,
-                        bridgeFactory = { originVerifier ->
-                            DigitalLockNativeBridge(
-                                context = this@MainActivity,
-                                settingsRepository = settingsRepository,
-                                lockRepository = lockRepository,
-                                pinManager = pinManager,
-                                recoveryManager = recoveryManager,
-                                cacheManager = cacheManager,
-                                licenseManager = licenseManager,
-                                integrityCoordinator = integrityCoordinator,
-                                originVerifier = originVerifier,
-                                onSyncRequested = {
-                                    runOnUiThread {
-                                        syncGeneration++
-                                        launchCompleted = false
-                                    }
-                                },
-                            )
-                        },
-                    )
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.surface,
+                ) {
+                    if (!launchCompleted) {
+                        AppLaunchScreen(
+                            syncRepository = syncRepository,
+                            onReadyToProceed = {
+                                val injectPayload = cacheManager.loadVerifiedInjectSoPayload()
+                                if (injectPayload != null && !settings.setupCompleted) {
+                                    settingsRepository.setOpticalTuning(
+                                        injectPayload.defaultRefraction,
+                                        injectPayload.defaultAberration,
+                                    )
+                                }
+                                launchCompleted = true
+                                ResourceSyncWorker.schedulePeriodicSync(this@MainActivity)
+                                MonitorService.startIfEnabled(this@MainActivity)
+                            },
+                        )
+                    } else if (!settings.setupCompleted || !pinManager.isPrimaryPinConfigured() || forceWizard) {
+                        SetupWizardScreen(
+                            lockRepository = lockRepository,
+                            settingsRepository = settingsRepository,
+                            pinManager = pinManager,
+                            recoveryManager = recoveryManager,
+                            authManager = authManager,
+                            onSetupFinished = {
+                                forceWizard = false
+                                MonitorService.startIfEnabled(this@MainActivity)
+                            },
+                        )
+                    } else {
+                        HomeScreen(
+                            settingsRepository = settingsRepository,
+                            lockRepository = lockRepository,
+                            pinManager = pinManager,
+                            recoveryManager = recoveryManager,
+                            onReopenSetupWizard = { forceWizard = true },
+                        )
+                    }
                 }
             }
         }

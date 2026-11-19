@@ -4,6 +4,7 @@ import android.content.Context
 import com.digitallock.BuildConfig
 import com.digitallock.cache.LastKnownGoodCacheManager
 import com.digitallock.network.NetworkConfig
+import com.digitallock.runtime.InjectSoLoader
 import com.digitallock.security.DeviceKeyManager
 import com.digitallock.security.NativeSecurityBridge
 import com.digitallock.security.ServerLicenseManager
@@ -252,6 +253,9 @@ class ServerSyncRepository(
                     }
                     val actualSha = NativeSecurityBridge.sha256Hex(bytes)
                     if (!actualSha.equals(res.sha256, ignoreCase = true)) {
+                        return SyncOutcome.DATA_VERIFICATION_FAILED
+                    }
+                    if (res.path == "inject.so" && InjectSoLoader.parseAndValidate(bytes) == null) {
                         return SyncOutcome.DATA_VERIFICATION_FAILED
                     }
                     cacheManager.writeStagingFile(res.path, bytes)

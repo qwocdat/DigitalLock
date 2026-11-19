@@ -121,7 +121,7 @@ pub fn validate_manifest_json_str(raw_json: &str) -> Result<(), &'static str> {
         "sound",
         "config",
     ];
-    let forbidden_exts = [".dex", ".jar", ".apk", ".so", ".sh", ".php", ".exe"];
+    let forbidden_exts = [".dex", ".jar", ".apk", ".sh", ".php", ".exe"];
 
     for res in &parsed.resources {
         if res.id.is_empty() || res.id.len() > 64 {

@@ -144,7 +144,7 @@ object NativeSecurityBridge {
                 return ManifestValidationResult.Invalid("too_many_resources")
             }
             val allowedTypes = setOf("theme", "wallpaper", "animation", "shader_config", "icon", "font", "sound", "config")
-            val forbiddenExts = listOf(".dex", ".jar", ".apk", ".so", ".sh", ".php", ".exe")
+            val forbiddenExts = listOf(".dex", ".jar", ".apk", ".sh", ".php", ".exe")
             for (i in 0 until resources.length()) {
                 val item = resources.getJSONObject(i)
                 val path = item.optString("path", "")
